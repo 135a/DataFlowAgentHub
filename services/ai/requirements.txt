@@ -1,0 +1,15 @@
+grpcio==1.68.1
+grpcio-tools==1.68.1
+protobuf==5.28.3
+openai==1.57.4
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
+chromadb>=0.5.0
+pandas>=2.2.0
+numpy>=1.26.0
+openpyxl>=3.1.0
+nats-py>=2.7.0
+httpx>=0.27.0
+opentelemetry-sdk>=1.25.0
+opentelemetry-exporter-otlp-proto-grpc>=1.25.0

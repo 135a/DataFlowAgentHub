@@ -1,0 +1,97 @@
+# 一键启动：在 deploy/compose 目录执行 docker compose up -d --build
+# 若拉取 postgres/redis 失败且日志出现 docker.mirrors.ustc.edu.cn 等 EOF：请到 Docker Desktop
+# 「Settings → Docker Engine」调整或移除 registry-mirrors 后执行 docker compose pull 再 up。
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hub
+      POSTGRES_PASSWORD: hub
+      POSTGRES_DB: hub
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # Vector database for RAG knowledge base
+  chroma:
+    image: chromadb/chroma:0.5.20
+    environment:
+      CHROMA_HOST_ADDR: "0.0.0.0"
+      CHROMA_HOST_PORT: "8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadata:/chroma/chroma
+
+  # Async message queue (lightweight NATS instead of RocketMQ for Docker simplicity)
+  nats:
+    image: nats:2.10-alpine
+    command: ["--jetstream", "--store_dir=/data"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"   # monitoring
+    volumes:
+      - natsdata:/data
+
+  ai-worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.ai
+    environment:
+      WORKER_GRPC_ADDR: 0.0.0.0:50051
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      LOG_LEVEL: INFO
+      # Chroma
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
+      # NATS
+      NATS_URL: nats://nats:4222
+      # Callback to Go API
+      HUB_API_INTERNAL_URL: http://api:8080
+      HUB_INTERNAL_HMAC_SECRET: ${HUB_INTERNAL_HMAC_SECRET:-dev-hmac-secret-change-me}
+    expose:
+      - "50051"
+    depends_on:
+      - chroma
+      - nats
+
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.api
+    environment:
+      HUB_HTTP_ADDR: ":8080"
+      HUB_DATABASE_URL: postgres://hub:hub@postgres:5432/hub?sslmode=disable
+      HUB_REDIS_ADDR: redis:6379
+      HUB_JWT_SECRET: ${HUB_JWT_SECRET:-dev-insecure-change-me}
+      HUB_SEED_EMAIL: ${HUB_SEED_EMAIL:-admin@demo.local}
+      HUB_SEED_PASSWORD: ${HUB_SEED_PASSWORD:-changeme}
+      HUB_NL2SQL_TARGET: ai-worker:50051
+      HUB_GLOBAL_API_KEY: ${HUB_GLOBAL_API_KEY:-}
+      HUB_LLM_API_KEY: ${HUB_LLM_API_KEY:-}
+      HUB_LLM_BASE_URL: ${HUB_LLM_BASE_URL:-https://api.openai.com/v1}
+      HUB_LLM_MODEL: ${HUB_LLM_MODEL:-gpt-4o-mini}
+      # NATS for async tasks
+      HUB_NATS_URL: nats://nats:4222
+      HUB_INTERNAL_HMAC_SECRET: ${HUB_INTERNAL_HMAC_SECRET:-dev-hmac-secret-change-me}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - redis
+      - ai-worker
+      - nats
+
+volumes:
+  pgdata:
+  chromadata:
+  natsdata:

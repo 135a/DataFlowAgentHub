@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package nl2sql.v1;
+
+option go_package = "github.com/dataflowagenthub/hub/internal/gen/nl2sql/v1;nlv1";
+
+// NL2SQLService is invoked by the Go control plane to generate SQL on the Python worker.
+service NL2SQLService {
+  rpc GenerateSQL(GenerateSQLRequest) returns (GenerateSQLResponse);
+  rpc RunAgentPipeline(RunAgentPipelineRequest) returns (RunAgentPipelineResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string version = 1;
+  bool ok = 2;
+}
+
+message GenerateSQLRequest {
+  string trace_id = 1;
+  string session_id = 2;
+  string user_message = 3;
+  // JSON string: condensed schema / table list for prompting.
+  string schema_json = 4;
+  string dialect = 5;
+}
+
+message GenerateSQLResponse {
+  string sql = 1;
+  string self_check_notes = 2;
+  bool ok = 3;
+  string error_message = 4;
+}
+
+message RunAgentPipelineRequest {
+  string trace_id = 1;
+  string session_id = 2;
+  string run_id = 3;
+  string user_message = 4;
+  string schema_json = 5;
+}
+
+message RunAgentPipelineResponse {
+  bool ok = 1;
+  string error_message = 2;
+  string final_report = 3;
+}

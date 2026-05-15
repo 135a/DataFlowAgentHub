@@ -1,0 +1,21 @@
+# NL2SQL Python gRPC worker
+FROM python:3.12-slim-bookworm AS build
+WORKDIR /app
+RUN pip install --no-cache-dir grpcio-tools==1.68.1 protobuf==5.28.3
+COPY api/proto /app/api/proto
+RUN mkdir -p /app/gen && python -m grpc_tools.protoc \
+    -I /app/api/proto \
+    --python_out=/app/gen \
+    --grpc_python_out=/app/gen \
+    /app/api/proto/nl2sql/v1/nl2sql.proto \
+    && touch /app/gen/__init__.py /app/gen/nl2sql/__init__.py /app/gen/nl2sql/v1/__init__.py
+
+FROM python:3.12-slim-bookworm
+WORKDIR /app/services/ai
+ENV PYTHONPATH=/app/gen
+RUN pip install --no-cache-dir grpcio==1.68.1 protobuf==5.28.3 openai==1.57.4
+COPY --from=build /app/gen /app/gen
+COPY services/ai/requirements.txt /app/services/ai/
+COPY services/ai/hub_ai /app/services/ai/hub_ai
+EXPOSE 50051
+CMD ["python", "-m", "hub_ai"]

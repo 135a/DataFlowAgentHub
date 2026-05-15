@@ -1,0 +1,139 @@
+openapi: 3.0.3
+info:
+  title: DataFlowAgentHub API
+  version: "0.1.0"
+  description: |
+    控制面 HTTP API（MVP）。鉴权：Bearer JWT，或请求头 `X-Hub-Api-Key`（与 `HUB_GLOBAL_API_KEY` 匹配时视为 demo workspace admin）。
+servers:
+  - url: http://localhost:8080
+paths:
+  /health:
+    get:
+      summary: 依赖健康检查
+      responses:
+        "200":
+          description: ok
+  /version:
+    get:
+      summary: 版本信息
+      responses:
+        "200":
+          description: ok
+  /v1/auth/login:
+    post:
+      summary: 登录（种子用户）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        "200": { description: token }
+  /v1/sessions:
+    get:
+      summary: 会话列表
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: ok }
+    post:
+      summary: 创建会话
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201": { description: created }
+  /v1/sessions/{sessionID}/messages:
+    get:
+      summary: 消息历史
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: sessionID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: ok }
+    post:
+      summary: 发送消息（触发 NL2SQL 流水线）
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: sessionID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text: { type: string }
+      responses:
+        "200": { description: ok }
+        "202": { description: awaiting approval }
+  /v1/sessions/{sessionID}/stream:
+    get:
+      summary: SSE 事件流
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: sessionID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: text/event-stream
+  /v1/data-sources:
+    get:
+      summary: 数据源列表（不返回密码）
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: ok }
+    post:
+      summary: 创建数据源（operator+）
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201": { description: created }
+  /v1/data-sources/{id}/test:
+    post:
+      summary: 测试连接（operator+）
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: ok }
+  /v1/approvals:
+    get:
+      summary: 待审批列表（operator+）
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: ok }
+  /v1/approvals/{id}/decide:
+    post:
+      summary: 审批决策（operator+）
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                decision: { type: string, enum: [approve, reject] }
+      responses:
+        "200": { description: ok }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

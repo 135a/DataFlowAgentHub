@@ -1,0 +1,10 @@
+/.gomodcache/
+/.tools/bin/*.exe
+/.tools/bin/protoc-gen-go*
+!/.tools/bin/.gitkeep
+/web/node_modules/
+/web/dist/
+*.exe
+*.test
+.env
+!.env.example
