@@ -1,33 +1,37 @@
 # DataFlowAgentHub 项目问题总结
 
-> 生成日期: 2026-05-15 | 基于 commit `0cbb6ac`
+> 生成日期: 2026-05-15 | 最后更新: 2026-05-16 | 基于 commit `cb8194e`
 
 ---
 
 ## 一、编译阻断级 Bug（代码无法通过编译）
 
-| # | 文件 | 问题 |
-|---|------|------|
-| 1 | `internal/config/config.go` | 缺少 `InternalHMACSecret` 字段，`tasks.go:55,123` 引用了 `a.Cfg.InternalHMACSecret` 但 Config 结构体中不存在 |
-| 2 | `internal/handlers/tasks.go` | 未导入 `ssebus` 包，第 113、165 行使用了 `a.Bus.Publish()` 但编译会失败 |
-| 3 | `internal/handlers/knowledge.go` | 第 7 行导入了 `"io"` 但未使用，Go 编译器会拒绝 |
+<!-- 全部已修复 ✅ (2026-05-16 核验, go build ./... 通过) -->
 
-**修复建议**:
-- 在 `config.Config` 中添加 `InternalHMACSecret string` 字段，env tag 为 `HUB_INTERNAL_HMAC_SECRET`
-- 在 `tasks.go` 的 import 块中补上 `"github.com/dataflowagenthub/hub/internal/ssebus"`
-- 删除 `knowledge.go` 中未使用的 `"io"` import
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| 1 | `internal/config/config.go` | 缺少 `InternalHMACSecret` 字段，`tasks.go:55,123` 引用了 `a.Cfg.InternalHMACSecret` 但 Config 结构体中不存在 | ✅ 已修复 |
+| 2 | `internal/handlers/tasks.go` | 未导入 `ssebus` 包，第 113、165 行使用了 `a.Bus.Publish()` 但编译会失败 | ✅ 已修复 |
+| 3 | `internal/handlers/knowledge.go` | 第 7 行导入了 `"io"` 但未使用，Go 编译器会拒绝 | ✅ 已修复 |
+
+~~**修复建议**:~~
+~~- 在 `config.Config` 中添加 `InternalHMACSecret string` 字段，env tag 为 `HUB_INTERNAL_HMAC_SECRET`~~
+~~- 在 `tasks.go` 的 import 块中补上 `"github.com/dataflowagenthub/hub/internal/ssebus"`~~
+~~- 删除 `knowledge.go` 中未使用的 `"io"` import~~
 
 ---
 
 ## 二、运行时阻断级 Bug（编译通过但运行时报错）
 
-| # | 文件 | 问题 |
-|---|------|------|
-| 4 | `Dockerfile.ai` | **仅拷贝了 `services/ai/hub_ai/` 目录**，未拷贝 `orchestrator/`、`agents/`、`rag/` 目录。`__main__.py` 第 100 行 `import orchestrator.graph` 会在容器中抛出 `ModuleNotFoundError` |
-| 5 | `api/proto/nl2sql/v1/nl2sql.proto` | `RunAgentPipeline` RPC 在 proto 中已定义，但生成的 Go 客户端桩代码（`internal/gen/`）中不包含该方法，Go gRPC 客户端无法调用此 RPC |
-| 6 | `internal/handlers/knowledge.go:111` | `TODO: Publish task to NATS` — 知识文档上传后只写入了数据库，从未发布到 NATS，Python 消费者永远收不到索引任务，文档永远停留在 `pending` 状态 |
-| 7 | `services/ai/orchestrator/consumer.py:37-77` | `process_message` 函数的 `headers` 变量在 try 块内定义，若异常发生在 headers 赋值之前（第 37 行），except 块会因 `NameError` 再次崩溃 |
-| 8 | `internal/migrate/` (002-004) | ~~三个补充迁移文件原在 `migrations/`(005-007)，现已统一到 `internal/migrate/`(002-004)，由 Go embed 机制自动执行~~ **已修复** |
+<!-- #4-#8 全部已修复 ✅ (2026-05-16 核验) -->
+
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| 4 | `Dockerfile.ai` | **仅拷贝了 `services/ai/hub_ai/` 目录**，未拷贝 `orchestrator/`、`agents/`、`rag/` 目录。`__main__.py` 第 100 行 `import orchestrator.graph` 会在容器中抛出 `ModuleNotFoundError` | ✅ 已修复（`COPY services/ai/` 整个目录） |
+| 5 | `api/proto/nl2sql/v1/nl2sql.proto` | `RunAgentPipeline` RPC 在 proto 中已定义，但生成的 Go 客户端桩代码（`internal/gen/`）中不包含该方法，Go gRPC 客户端无法调用此 RPC | ✅ 已修复（`internal/gen/` 含完整 stub，`internal/worker/nl2sql.go:50` 有客户端封装） |
+| 6 | `internal/handlers/knowledge.go:111` | `TODO: Publish task to NATS` — 知识文档上传后只写入了数据库，从未发布到 NATS，Python 消费者永远收不到索引任务，文档永远停留在 `pending` 状态 | ✅ 已修复（`AsyncTask.EnqueueTask` 同时写 DB + 发布 NATS） |
+| 7 | `services/ai/orchestrator/consumer.py:37-77` | `process_message` 函数的 `headers` 变量在 try 块内定义，若异常发生在 headers 赋值之前（第 37 行），except 块会因 `NameError` 再次崩溃 | ✅ 已修复（`task_id` 在 try 前初始化为 `""`，异常处理有 `if task_id:` 保护） |
+| 8 | `internal/migrate/` (002-004) | ~~三个补充迁移文件原在 `migrations/`(005-007)，现已统一到 `internal/migrate/`(002-004)，由 Go embed 机制自动执行~~ | ✅ 已修复 |
 
 ---
 
