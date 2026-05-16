@@ -31,8 +31,17 @@ def report_generation_node(state: AgentState) -> dict:
     else:
         md_lines.append("*No data returned.*")
         
+    # Add chart visualization section if chart_paths exist
+    chart_paths = state.get("chart_paths", [])
+    if chart_paths:
+        md_lines.append("\n## 数据可视化")
+        for p in chart_paths:
+            filename = os.path.basename(p)
+            md_lines.append(f"\n![chart](./{filename})")
+        md_lines.append(f"\n*共 {len(chart_paths)} 个图表*")
+
     final_md = "\n".join(md_lines)
-    
+
     # 5.3 Generate Excel (Save to local mount or tmp)
     # We will just write to a /tmp directory which could be a volume mount in docker
     os.makedirs("/tmp/reports", exist_ok=True)

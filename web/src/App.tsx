@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { Link } from "react-router-dom";
 import { apiFetch, apiJson, getSSEUrl } from "./api";
 import { ResultTable } from "./ResultTable";
+import { ChartView } from "./components/ChartView";
 import type {
   Session,
   ApiMessage,
@@ -309,33 +310,8 @@ function MessageBody({ content }: { content: MessageContent }) {
 
   if (sql !== null && rows) {
     const notes = c.notes;
-    return (
-      <div>
-        <div style={{ marginBottom: 8 }}>
-          <strong style={{ fontSize: 12 }}>SQL</strong>
-          <pre
-            style={{
-              margin: "4px 0 0",
-              padding: 8,
-              background: "rgba(0,0,0,0.06)",
-              borderRadius: 6,
-              fontSize: 12,
-              overflowX: "auto",
-            }}
-          >
-            {sql}
-          </pre>
-        </div>
-        <strong style={{ fontSize: 12 }}>结果</strong>
-        <ResultTable rows={rows} />
-        {notes != null &&
-        (Array.isArray(notes) ? notes.length > 0 : String(notes).length > 0) ? (
-          <p style={{ fontSize: 12, margin: "8px 0 0", opacity: 0.85 }}>
-            自检：{Array.isArray(notes) ? notes.map(String).join("；") : String(notes)}
-          </p>
-        ) : null}
-      </div>
-    );
+    const hasNumeric = rows.length > 0 && Object.values(rows[0] || {}).some(v => typeof v === "number");
+    return <SqlResultBlock sql={sql} rows={rows} hasNumeric={hasNumeric} notes={notes} />;
   }
 
   if (c.final_report) {
@@ -359,6 +335,65 @@ function MessageBody({ content }: { content: MessageContent }) {
 
   return (
     <pre style={{ margin: 0, fontSize: 12, overflowX: "auto" }}>{JSON.stringify(content, null, 2)}</pre>
+  );
+}
+
+function SqlResultBlock({ sql, rows, hasNumeric, notes }: {
+  sql: string;
+  rows: Record<string, unknown>[];
+  hasNumeric: boolean;
+  notes: unknown;
+}) {
+  const [view, setView] = useState<"table" | "chart">("table");
+
+  return (
+    <div>
+      <div style={{ marginBottom: 8 }}>
+        <strong style={{ fontSize: 12 }}>SQL</strong>
+        <pre
+          style={{
+            margin: "4px 0 0",
+            padding: 8,
+            background: "rgba(0,0,0,0.06)",
+            borderRadius: 6,
+            fontSize: 12,
+            overflowX: "auto",
+          }}
+        >
+          {sql}
+        </pre>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <strong style={{ fontSize: 12 }}>结果</strong>
+        {hasNumeric && (
+          <button
+            type="button"
+            onClick={() => setView(v => v === "table" ? "chart" : "table")}
+            style={{
+              padding: "2px 10px",
+              fontSize: 11,
+              cursor: "pointer",
+              border: "1px solid #ccc",
+              borderRadius: 4,
+              background: "#fff",
+            }}
+          >
+            {view === "table" ? "图表" : "表格"}
+          </button>
+        )}
+      </div>
+      {view === "table" ? (
+        <ResultTable rows={rows} />
+      ) : (
+        <ChartView rows={rows} />
+      )}
+      {notes != null &&
+      (Array.isArray(notes) ? notes.length > 0 : String(notes).length > 0) ? (
+        <p style={{ fontSize: 12, margin: "8px 0 0", opacity: 0.85 }}>
+          自检：{Array.isArray(notes) ? notes.map(String).join("；") : String(notes)}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

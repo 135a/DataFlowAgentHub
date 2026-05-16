@@ -1,6 +1,6 @@
-from typing import TypedDict, Any
+from typing import TypedDict, Any, Optional
 
-class AgentState(TypedDict):
+class AgentState(TypedDict, total=False):
     run_id: str
     user_input: str
     schema_context: str
@@ -10,3 +10,7 @@ class AgentState(TypedDict):
     analysis_summary: str
     final_report: str
     error: str
+    chart_paths: list[str]
+    nl2sql_sql: str
+    nl2sql_error: str
+    workflow: str

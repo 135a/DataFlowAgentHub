@@ -13,6 +13,7 @@ from orchestrator.tracing import report_run_step
 from hub_ai.shared import make_headers
 from agents.data_analysis_agent import data_analysis_node
 from agents.report_generation_agent import report_generation_node
+from agents.chart_agent import chart_agent_node
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -65,7 +66,7 @@ def nl2sql_node(state: AgentState) -> dict:
             return {"nl2sql_error": str(e)}
 
 
-def route_next(state: AgentState) -> Literal["analysis_node", "report_node", "__end__"]:
+def route_next(state: AgentState) -> Literal["analysis_node", "chart_node", "report_node", "__end__"]:
     """Route to next node based on user input keywords and workflow parameter."""
     user_input = state.get("user_input", "").lower()
     workflow = state.get("workflow", "auto")
@@ -78,10 +79,13 @@ def route_next(state: AgentState) -> Literal["analysis_node", "report_node", "__
         return "analysis_node"
 
     # Auto: keyword-based routing (supports both Chinese and English)
+    chart_kw = ("chart", "图表", "可视化", "chart", "plot", "graph")
     analyze_kw = ("分析", "analyze", "trend", "趋势", "对比", "compare")
     report_kw = ("报告", "report", "export", "导出", "简报")
 
-    if any(kw in user_input for kw in analyze_kw):
+    if any(kw in user_input for kw in chart_kw):
+        return "chart_node"
+    elif any(kw in user_input for kw in analyze_kw):
         return "analysis_node"
     elif any(kw in user_input for kw in report_kw):
         return "report_node"
@@ -90,16 +94,34 @@ def route_next(state: AgentState) -> Literal["analysis_node", "report_node", "__
     return "__end__"
 
 
+def route_after_analysis(state: AgentState) -> Literal["chart_node", "report_node"]:
+    """After analysis: route to chart_node if agent_pipeline, else straight to report."""
+    workflow = state.get("workflow", "auto")
+    if workflow == "agent_pipeline":
+        return "chart_node"
+    return "report_node"
+
+
+def route_after_chart(state: AgentState) -> Literal["report_node", "__end__"]:
+    """After chart: route to report_node if not in report-only mode."""
+    workflow = state.get("workflow", "auto")
+    if workflow == "agent_pipeline":
+        return "report_node"
+    return "__end__"
+
+
 def build_graph():
     builder = StateGraph(AgentState)
 
     builder.add_node("nl2sql_node", nl2sql_node)
     builder.add_node("analysis_node", data_analysis_node)
+    builder.add_node("chart_node", chart_agent_node)
     builder.add_node("report_node", report_generation_node)
 
     builder.add_edge(START, "nl2sql_node")
     builder.add_conditional_edges("nl2sql_node", route_next)
-    builder.add_edge("analysis_node", "report_node")
+    builder.add_conditional_edges("analysis_node", route_after_analysis)
+    builder.add_conditional_edges("chart_node", route_after_chart)
     builder.add_edge("report_node", END)
 
     memory = MemorySaver()

@@ -17,9 +17,10 @@ dependencies = [
   "langchain-openai>=0.2.0",
   # Vector / RAG
   "chromadb>=0.5.0",
-  # Data analysis
+  # Data analysis & charting
   "pandas>=2.2.0",
   "numpy>=1.26.0",
+  "matplotlib>=3.8.0",
   # Report export
   "openpyxl>=3.1.0",
   # Async task consumer (NATS)
