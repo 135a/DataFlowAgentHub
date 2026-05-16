@@ -343,18 +343,19 @@ volumes:
 
 ### P2-2：统一迁移文件管理
 
-**现状**：存在两套迁移文件——
-- `internal/migrate/001-004_*.sql`：Go embed 打包，启动时自动执行
-- `migrations/005-007_*.sql`：未自动执行，需要手动操作
+**现状**：~~存在两套迁移文件——~~ 已统一。
+- `internal/migrate/001-004_*.sql`：Go embed 打包，启动时自动执行，所有迁移文件均在此目录
+- ~~`migrations/005-007_*.sql`：未自动执行，需要手动操作~~ 已删除冗余副本
 
 **修复**：
 
-1. 确认 `internal/migrate/` 的内容覆盖了 `migrations/` 的需求（002=async_tasks, 003=knowledge_docs, 004=agent_run_steps，对应 migrations 的 005-007）
-2. 如果已覆盖 → 删除 `migrations/` 目录
-3. 如果未完全覆盖 → 将缺失内容合并到 `internal/migrate/`，再删除 `migrations/`
+1. ~~确认 `internal/migrate/` 的内容覆盖了 `migrations/` 的需求（002=async_tasks, 003=knowledge_docs, 004=agent_run_steps，对应 migrations 的 005-007）~~ 已确认
+2. ~~如果已覆盖 → 删除 `migrations/` 目录~~ 已删除
+3. ~~如果未完全覆盖 → 将缺失内容合并到 `internal/migrate/`，再删除 `migrations/`~~ 无需操作
 
-**检查方法**：
+**检查方法（已完成）**：
 ```bash
+# 以下验证已通过，内容一致
 diff internal/migrate/002_async_tasks.sql migrations/005_async_tasks.sql
 diff internal/migrate/003_knowledge_docs.sql migrations/006_knowledge_docs.sql
 diff internal/migrate/004_agent_run_steps.sql migrations/007_agent_run_steps.sql

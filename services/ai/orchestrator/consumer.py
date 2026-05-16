@@ -2,27 +2,14 @@ import asyncio
 import json
 import logging
 import os
-import hmac
-import hashlib
 import httpx
 from nats.aio.client import Client as NATS
 from orchestrator.graph import workflow_graph
+from hub_ai.shared import sign_body, make_headers
 
 logger = logging.getLogger(__name__)
 
 
-def sign_body(secret: str, body: bytes) -> str:
-    """Return X-Hub-Signature header value for the request body."""
-    mac = hmac.new(secret.encode(), body, hashlib.sha256)
-    return f"sha256={mac.hexdigest()}"
-
-
-def make_headers(secret: str, body_bytes: bytes) -> dict:
-    """Build headers with HMAC signature for internal API calls."""
-    return {
-        "X-Hub-Signature": sign_body(secret, body_bytes),
-        "Content-Type": "application/json",
-    }
 
 
 async def process_message(msg):

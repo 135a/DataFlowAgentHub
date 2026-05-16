@@ -1,7 +1,5 @@
 import httpx
 import json
-import hmac
-import hashlib
 import logging
 import os
 from typing import Literal
@@ -12,6 +10,7 @@ from opentelemetry import trace
 
 from orchestrator.state import AgentState
 from orchestrator.tracing import report_run_step
+from hub_ai.shared import make_headers
 from agents.data_analysis_agent import data_analysis_node
 from agents.report_generation_agent import report_generation_node
 
@@ -38,11 +37,7 @@ def nl2sql_node(state: AgentState) -> dict:
                 "dialect": "postgres",
             }
             body_bytes = json.dumps(body).encode()
-            mac = hmac.new(secret.encode(), body_bytes, hashlib.sha256)
-            headers = {
-                "X-Hub-Signature": f"sha256={mac.hexdigest()}",
-                "Content-Type": "application/json",
-            }
+            headers = make_headers(secret, body_bytes)
 
             with httpx.Client(timeout=30.0) as client:
                 resp = client.post(

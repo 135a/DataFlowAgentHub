@@ -126,7 +126,7 @@
 | P2 | **SSE 总线不持久、不可扩展** | `ssebus/bus.go` 内存 map+channel，单进程 |
 | P2 | **LangGraph checkpointer 用 MemorySaver** | 进程重启丢失所有检查点 |
 | P2 | **gRPC RunAgentPipeline 定义但未使用** | proto 定义了但实际走 NATS |
-| P2 | **`migrations/` 与 `internal/migrate/` 重复** | 两套迁移文件，维护者不知道该改哪个 |
+| P2 | **~~`migrations/` 与 `internal/migrate/` 重复~~** | ~~两套迁移文件~~ **已修复** — 迁移文件已统一到 `internal/migrate/` |
 | P2 | **`pkg/` 目录为空** | 仅有 .gitkeep |
 | P3 | **无 CI/CD** | 没有 GitHub Actions 或其他 CI 配置 |
 
@@ -332,7 +332,7 @@ schema/             █████    ░░░░
 |---|------|------|
 | Day 8-9 | 前端加 `recharts` 图表渲染 + ErrorBoundary + Skeleton 加载态 + TypeScript 类型化 | 前端体验合格 |
 | Day 10 | 写 `docs/AGENT_DESIGN.md`（LangGraph 设计理由、prompt 迭代、状态管理） | 面试时可以展开讲 |
-| Day 11 | 清理项目：删除 `migrations/`（与 `internal/migrate/` 重复）、删除或填充 `pkg/`、修所有 FIXME/TODO | 项目整洁 |
+| Day 11 | 清理项目：~~删除 `migrations/`（与 `internal/migrate/` 重复）~~ **已完成**、删除或填充 `pkg/`、修所有 FIXME/TODO | 项目整洁 |
 | Day 12 | Docker Compose 全栈测试（反复 up/down 幂等性）；修 Dockerfile 版本对齐 | 面试官 clone 即跑 |
 | Day 13 | 录 3 分钟 demo 视频 + 写 README 里的演示场景说明 | 面试官没时间跑也能了解 |
 | Day 14 | 缓冲日 / 补充压测数据 | 从容应对 |

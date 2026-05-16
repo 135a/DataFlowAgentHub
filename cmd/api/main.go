@@ -15,6 +15,7 @@ import (
 	"github.com/dataflowagenthub/hub/internal/config"
 	"github.com/dataflowagenthub/hub/internal/handlers"
 	"github.com/dataflowagenthub/hub/internal/migrate"
+	"github.com/dataflowagenthub/hub/internal/nl2sqlexec"
 	"github.com/dataflowagenthub/hub/internal/otelsetup"
 	"github.com/dataflowagenthub/hub/internal/seed"
 	"github.com/dataflowagenthub/hub/internal/ssebus"
@@ -70,15 +71,18 @@ func main() {
 		zl.Warn("nats connect failed, async tasks disabled", zap.Error(err))
 	}
 
+	nl2sqlExec := nl2sqlexec.NewExecutor(nl, cfg.QueryMaxRows, cfg.QueryTimeout)
+
 	app := &handlers.App{
-		Cfg:       cfg,
-		Log:       zl,
-		DB:        pool,
-		Redis:     rdb,
-		Nl2sql:    nl,
-		Bus:       ssebus.New(),
-		NATS:      nc,
-		AsyncTask: async.NewClient(pool, nc, zl),
+		Cfg:        cfg,
+		Log:        zl,
+		DB:         pool,
+		Redis:      rdb,
+		Nl2sql:     nl,
+		Bus:        ssebus.New(),
+		NATS:       nc,
+		AsyncTask:  async.NewClient(pool, nc, zl),
+		NL2SQLExec: nl2sqlExec,
 	}
 
 	otelShutdown, err := otelsetup.Init()

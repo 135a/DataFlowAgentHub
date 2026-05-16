@@ -27,7 +27,7 @@
 | 5 | `api/proto/nl2sql/v1/nl2sql.proto` | `RunAgentPipeline` RPC 在 proto 中已定义，但生成的 Go 客户端桩代码（`internal/gen/`）中不包含该方法，Go gRPC 客户端无法调用此 RPC |
 | 6 | `internal/handlers/knowledge.go:111` | `TODO: Publish task to NATS` — 知识文档上传后只写入了数据库，从未发布到 NATS，Python 消费者永远收不到索引任务，文档永远停留在 `pending` 状态 |
 | 7 | `services/ai/orchestrator/consumer.py:37-77` | `process_message` 函数的 `headers` 变量在 try 块内定义，若异常发生在 headers 赋值之前（第 37 行），except 块会因 `NameError` 再次崩溃 |
-| 8 | `migrations/` (005-007) | 三个补充迁移文件（`async_tasks`、`knowledge_docs`、`agent_run_steps`）**不会被 Go 的 `internal/migrate/migrate.go` 自动执行**。内嵌迁移只包含 `001_init.sql`，缺失编号 002-004，外部迁移需手动执行 |
+| 8 | `internal/migrate/` (002-004) | ~~三个补充迁移文件原在 `migrations/`(005-007)，现已统一到 `internal/migrate/`(002-004)，由 Go embed 机制自动执行~~ **已修复** |
 
 ---
 

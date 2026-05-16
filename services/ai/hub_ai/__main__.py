@@ -191,19 +191,29 @@ def main():
     server.start()
     logging.getLogger(__name__).info("grpc listening on %s", addr)
     
-    # 9.3 Start NATS consumer in background
-    def start_consumer():
+    # 9.3 Start NATS consumers in background
+    def start_agent_consumer():
         import asyncio
         from orchestrator.consumer import run_consumer
         try:
             asyncio.run(run_consumer())
         except Exception as e:
-            logging.error(f"Consumer died: {e}")
-            
+            logging.error(f"Agent consumer died: {e}")
+
+    def start_knowledge_consumer():
+        import asyncio
+        from orchestrator.knowledge_consumer import run_knowledge_consumer
+        try:
+            asyncio.run(run_knowledge_consumer())
+        except Exception as e:
+            logging.error(f"Knowledge consumer died: {e}")
+
     import threading
-    consumer_thread = threading.Thread(target=start_consumer, daemon=True)
-    consumer_thread.start()
-    logging.getLogger(__name__).info("Started NATS consumer thread")
+    agent_thread = threading.Thread(target=start_agent_consumer, daemon=True)
+    agent_thread.start()
+    knowledge_thread = threading.Thread(target=start_knowledge_consumer, daemon=True)
+    knowledge_thread.start()
+    logging.getLogger(__name__).info("Started NATS consumer threads (agent + knowledge)")
     
     server.wait_for_termination()
 

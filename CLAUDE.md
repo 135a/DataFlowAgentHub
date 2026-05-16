@@ -76,7 +76,7 @@ cd web && npm install && npm run dev                # Vite 开发服务器，默
 
 ### 数据库
 
-核心 schema（嵌入在 `internal/migrate/001_init.sql` 中）：`workspaces`、`users`、`data_sources`、`sessions`、`messages`、`runs`、`approval_tasks`、`audit_events`。补充迁移在 `migrations/`（005–007），新增 `async_tasks`、`knowledge_docs`、`agent_run_steps`。
+核心 schema（嵌入在 `internal/migrate/001_init.sql` 中）：`workspaces`、`users`、`data_sources`、`sessions`、`messages`、`runs`、`approval_tasks`、`audit_events`。补充迁移在 `internal/migrate/`（002–004），新增 `async_tasks`、`knowledge_docs`、`agent_run_steps`。
 
 ### 关键设计决策
 

@@ -1,9 +1,9 @@
 ## 1. 修改 ai-worker 启动逻辑
 
-- [ ] 1.1 将 `__main__.py` 第 195 行的 `start_consumer` 函数重命名为 `start_agent_consumer`
-- [ ] 1.2 新增 `start_knowledge_consumer` 函数，内部调用 `orchestrator.knowledge_consumer.run_knowledge_consumer()`
-- [ ] 1.3 创建 `knowledge_thread` daemon 线程，target 指向 `start_knowledge_consumer`
-- [ ] 1.4 更新日志信息：`"Started NATS consumer thread"` → `"Started NATS consumer threads (agent + knowledge)"`
+- [x] 1.1 将 `__main__.py` 第 195 行的 `start_consumer` 函数重命名为 `start_agent_consumer`
+- [x] 1.2 新增 `start_knowledge_consumer` 函数，内部调用 `orchestrator.knowledge_consumer.run_knowledge_consumer()`
+- [x] 1.3 创建 `knowledge_thread` daemon 线程，target 指向 `start_knowledge_consumer`
+- [x] 1.4 更新日志信息：`"Started NATS consumer thread"` → `"Started NATS consumer threads (agent + knowledge)"`
 
 ## 2. 验证
 

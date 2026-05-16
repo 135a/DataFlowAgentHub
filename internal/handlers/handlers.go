@@ -12,6 +12,7 @@ import (
 	"github.com/dataflowagenthub/hub/internal/config"
 	hubcrypto "github.com/dataflowagenthub/hub/internal/crypto"
 	"github.com/dataflowagenthub/hub/internal/middleware"
+	"github.com/dataflowagenthub/hub/internal/nl2sqlexec"
 	"github.com/dataflowagenthub/hub/internal/ratelimit"
 	"github.com/dataflowagenthub/hub/internal/schema"
 	"github.com/dataflowagenthub/hub/internal/seed"
@@ -34,14 +35,15 @@ const version = "0.1.0-dev"
 
 // App wires HTTP dependencies.
 type App struct {
-	Cfg       *config.Config
-	Log       *zap.Logger
-	DB        *pgxpool.Pool
-	Redis     *redis.Client
-	Nl2sql    *worker.NL2SQLClient
-	Bus       *ssebus.Bus
-	NATS      *nats.Conn
-	AsyncTask *async.Client
+	Cfg        *config.Config
+	Log        *zap.Logger
+	DB         *pgxpool.Pool
+	Redis      *redis.Client
+	Nl2sql     *worker.NL2SQLClient
+	Bus        *ssebus.Bus
+	NATS       *nats.Conn
+	AsyncTask  *async.Client
+	NL2SQLExec *nl2sqlexec.Executor
 }
 
 func JSON(w http.ResponseWriter, status int, v any) {
@@ -385,28 +387,35 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	gen, err := a.Nl2sql.GenerateSQL(ctx, trace, sid, body.Text, schemaJSON, dialect)
+	result, err := a.NL2SQLExec.Execute(ctx, nl2sqlexec.Input{
+		TraceID:     trace,
+		SessionID:   sid,
+		UserMessage: body.Text,
+		SchemaJSON:  schemaJSON,
+		Dialect:     dialect,
+	}, a.DB)
 	if err != nil {
-		st, _ := status.FromError(err)
-		a.finishRunFailed(ctx, rid, sid, "nl2sql: "+st.Message(), st.Code())
-		errJSON(w, http.StatusBadGateway, mapGRPCCode(st.Code()))
-		return
-	}
-	if !gen.GetOk() {
-		a.finishRunFailed(ctx, rid, sid, gen.GetErrorMessage(), codes.Internal)
-		errJSON(w, http.StatusBadRequest, gen.GetErrorMessage())
-		return
-	}
-	sql := strings.TrimSpace(gen.GetSql())
-	a.Bus.Publish(sid, ssebus.Event{Type: "sql_generated", Data: map[string]string{"sql": sql}})
-
-	rows, err := sqlrun.QueryRows(ctx, a.DB, sql, a.Cfg.QueryMaxRows, a.Cfg.QueryTimeout)
-	if err != nil {
+		if st, ok := status.FromError(err); ok {
+			a.finishRunFailed(ctx, rid, sid, "nl2sql: "+st.Message(), st.Code())
+			errJSON(w, http.StatusBadGateway, mapGRPCCode(st.Code()))
+			return
+		}
+		if genErr, ok := err.(*nl2sqlexec.GenerateError); ok {
+			a.finishRunFailed(ctx, rid, sid, genErr.Message, codes.Internal)
+			errJSON(w, http.StatusBadRequest, genErr.Message)
+			return
+		}
+		// SQL execution error — result contains the SQL for debugging
 		a.finishRunFailed(ctx, rid, sid, err.Error(), codes.InvalidArgument)
 		errJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	assist, _ := json.Marshal(map[string]any{"sql": sql, "rows": rows, "notes": gen.GetSelfCheckNotes()})
+
+	sql := result.SQL
+	rows := result.Rows
+	a.Bus.Publish(sid, ssebus.Event{Type: "sql_generated", Data: map[string]string{"sql": sql}})
+
+	assist, _ := json.Marshal(map[string]any{"sql": sql, "rows": rows, "notes": result.SelfCheckNotes})
 	_, _ = a.DB.Exec(ctx, `INSERT INTO messages (session_id, role, content) VALUES ($1::uuid, 'assistant', $2)`, sid, assist)
 	_, _ = a.DB.Exec(ctx, `UPDATE runs SET status = 'completed', updated_at = now() WHERE id = $1::uuid`, rid)
 	a.Bus.Publish(sid, ssebus.Event{Type: "result", Data: json.RawMessage(assist)})
@@ -587,28 +596,29 @@ func (a *App) InternalNL2SQL(w http.ResponseWriter, r *http.Request) {
 		traceID = middleware.TraceFromContext(r.Context())
 	}
 
-	gen, err := a.Nl2sql.GenerateSQL(r.Context(), traceID, "", body.UserMessage, body.SchemaJSON, body.Dialect)
+	result, err := a.NL2SQLExec.Execute(r.Context(), nl2sqlexec.Input{
+		TraceID:     traceID,
+		SessionID:   "",
+		UserMessage: body.UserMessage,
+		SchemaJSON:  body.SchemaJSON,
+		Dialect:     body.Dialect,
+	}, a.DB)
 	if err != nil {
-		a.Log.Error("internal nl2sql: gRPC GenerateSQL failed", zap.Error(err))
-		errJSON(w, http.StatusBadGateway, "nl2sql worker error: "+err.Error())
-		return
-	}
-	if !gen.GetOk() {
-		errJSON(w, http.StatusBadRequest, gen.GetErrorMessage())
-		return
-	}
-
-	sql := strings.TrimSpace(gen.GetSql())
-	rows, err := sqlrun.QueryRows(r.Context(), a.DB, sql, a.Cfg.QueryMaxRows, a.Cfg.QueryTimeout)
-	if err != nil {
-		errJSON(w, http.StatusBadRequest, err.Error())
+		if _, ok := status.FromError(err); ok {
+			a.Log.Error("internal nl2sql: gRPC GenerateSQL failed", zap.Error(err))
+			errJSON(w, http.StatusBadGateway, "nl2sql worker error: "+err.Error())
+		} else if genErr, ok := err.(*nl2sqlexec.GenerateError); ok {
+			errJSON(w, http.StatusBadRequest, genErr.Message)
+		} else {
+			errJSON(w, http.StatusBadRequest, err.Error())
+		}
 		return
 	}
 
 	JSON(w, http.StatusOK, map[string]any{
-		"sql":   sql,
-		"rows":  rows,
-		"notes": gen.GetSelfCheckNotes(),
+		"sql":   result.SQL,
+		"rows":  result.Rows,
+		"notes": result.SelfCheckNotes,
 	})
 }
 

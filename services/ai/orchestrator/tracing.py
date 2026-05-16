@@ -1,17 +1,10 @@
 import os
 import json
-import hmac
-import hashlib
 import httpx
 import logging
+from hub_ai.shared import make_headers
 
 logger = logging.getLogger(__name__)
-
-
-def sign_body(secret: str, body: bytes) -> str:
-    """Return X-Hub-Signature header value for the request body."""
-    mac = hmac.new(secret.encode(), body, hashlib.sha256)
-    return f"sha256={mac.hexdigest()}"
 
 
 def report_run_step(run_id: str, agent_name: str, status: str, input_summary: str = "", output_summary: str = "", error_message: str = ""):
@@ -27,10 +20,7 @@ def report_run_step(run_id: str, agent_name: str, status: str, input_summary: st
     }
 
     body_bytes = json.dumps(payload).encode()
-    headers = {
-        "X-Hub-Signature": sign_body(secret, body_bytes),
-        "Content-Type": "application/json",
-    }
+    headers = make_headers(secret, body_bytes)
 
     try:
         httpx.post(f"{api_url}/internal/runs/{run_id}/steps", headers=headers, content=body_bytes, timeout=2.0)
