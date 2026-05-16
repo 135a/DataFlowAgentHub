@@ -5,7 +5,7 @@ import os
 import httpx
 from nats.aio.client import Client as NATS
 from orchestrator.graph import workflow_graph
-from hub_ai.shared import sign_body, make_headers
+from hub_ai.shared import make_headers
 
 logger = logging.getLogger(__name__)
 

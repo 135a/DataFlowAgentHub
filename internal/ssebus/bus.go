@@ -1,7 +1,9 @@
 package ssebus
 
 import (
+	"log/slog"
 	"sync"
+	"sync/atomic"
 )
 
 // Event is a small JSON-serializable SSE payload.
@@ -11,8 +13,9 @@ type Event struct {
 }
 
 type Bus struct {
-	mu   sync.Mutex
-	subs map[string][]chan Event
+	mu         sync.Mutex
+	subs       map[string][]chan Event
+	totalDrops atomic.Int64
 }
 
 func New() *Bus {
@@ -46,6 +49,8 @@ func (b *Bus) Unsubscribe(sessionID string, ch chan Event) {
 	}
 }
 
+func (b *Bus) TotalDrops() int64 { return b.totalDrops.Load() }
+
 func (b *Bus) Publish(sessionID string, ev Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -53,6 +58,10 @@ func (b *Bus) Publish(sessionID string, ev Event) {
 		select {
 		case ch <- ev:
 		default:
+			drops := b.totalDrops.Add(1)
+			if drops%100 == 0 {
+				slog.Warn("sse event dropped", "session_id", sessionID, "total_drops", drops)
+			}
 		}
 	}
 }

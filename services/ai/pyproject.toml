@@ -13,6 +13,7 @@ dependencies = [
   "openai==1.57.4",
   # Multi-Agent orchestration
   "langgraph>=0.2.0",
+  "langgraph-checkpoint-sqlite>=2.0.0",
   "langchain>=0.3.0",
   "langchain-openai>=0.2.0",
   # Vector / RAG

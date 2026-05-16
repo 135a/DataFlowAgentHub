@@ -464,6 +464,17 @@ func (a *App) SessionStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	enc := json.NewEncoder(w)
+
+	// Log drop count on stream end for observability
+	defer func() {
+		if d := a.Bus.TotalDrops(); d > 0 {
+			a.Log.Warn("sse stream ended with drops",
+				zap.String("session_id", sid),
+				zap.Int64("total_drops", d),
+			)
+		}
+	}()
+
 	for {
 		select {
 		case <-r.Context().Done():

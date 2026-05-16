@@ -5,7 +5,7 @@ import os
 from typing import Literal
 
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from opentelemetry import trace
 
 from orchestrator.state import AgentState
@@ -124,8 +124,10 @@ def build_graph():
     builder.add_conditional_edges("chart_node", route_after_chart)
     builder.add_edge("report_node", END)
 
-    memory = MemorySaver()
-    graph = builder.compile(checkpointer=memory)
+    db_path = os.getenv("LANGGRAPH_DB_PATH", "/data/langgraph/checkpoints.db")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    checkpointer = SqliteSaver.from_conn_string(db_path)
+    graph = builder.compile(checkpointer=checkpointer)
     return graph
 
 
