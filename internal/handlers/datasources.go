@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"github.com/dataflowagenthub/hub/internal/connector"
+	hubcrypto "github.com/dataflowagenthub/hub/internal/crypto"
 	"github.com/dataflowagenthub/hub/internal/middleware"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 )
 
 type createDSBody struct {
@@ -77,11 +79,19 @@ func (a *App) CreateDataSource(w http.ResponseWriter, r *http.Request) {
 	if body.SSLMode == "" {
 		body.SSLMode = "disable"
 	}
+
+	encryptedPassword, err := hubcrypto.Encrypt(body.Password, a.Cfg.DBEncryptionKey)
+	if err != nil {
+		a.Log.Error("encrypt password", zap.Error(err))
+		errJSON(w, http.StatusInternalServerError, "failed to encrypt password")
+		return
+	}
+
 	id := uuid.NewString()
-	_, err := a.DB.Exec(r.Context(), `
+	_, err = a.DB.Exec(r.Context(), `
 		INSERT INTO data_sources (id, workspace_id, name, kind, host, port, database, username, password, sslmode)
 		VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		id, c.WorkspaceID, body.Name, body.Kind, body.Host, body.Port, body.Database, body.Username, body.Password, body.SSLMode)
+		id, c.WorkspaceID, body.Name, body.Kind, body.Host, body.Port, body.Database, body.Username, encryptedPassword, body.SSLMode)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "db")
 		return
@@ -102,7 +112,15 @@ func (a *App) TestDataSource(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusNotFound, "data source not found")
 		return
 	}
-	dsn := connector.DSN(host, port, user, pwd, db, ssl)
+
+	decryptedPwd, err := hubcrypto.Decrypt(pwd, a.Cfg.DBEncryptionKey)
+	if err != nil {
+		a.Log.Error("decrypt password", zap.Error(err))
+		JSON(w, http.StatusOK, map[string]any{"ok": false, "error": "failed to decrypt password"})
+		return
+	}
+
+	dsn := connector.DSN(host, port, user, decryptedPwd, db, ssl)
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
 	pool, err := pgxpool.New(ctx, dsn)

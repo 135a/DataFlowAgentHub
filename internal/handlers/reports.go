@@ -4,15 +4,24 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/dataflowagenthub/hub/internal/middleware"
 	"github.com/go-chi/chi/v5"
 )
 
+var uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
 // DownloadReport allows downloading the generated excel report for a run
 func (a *App) DownloadReport(w http.ResponseWriter, r *http.Request) {
 	_ = middleware.ClaimsFromContext(r.Context())
 	runID := chi.URLParam(r, "runID")
+
+	// Validate UUID v4 format to prevent path traversal
+	if !uuidRE.MatchString(runID) {
+		errJSON(w, http.StatusBadRequest, "invalid run id format")
+		return
+	}
 
 	// Ensure the run belongs to the user/workspace
 	var status string
@@ -27,10 +36,8 @@ func (a *App) DownloadReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// MVP: check /tmp/reports
-	// In reality, runID could map to reportID or we store the report ID in async_tasks result.
-	// We'll just look for runID.xlsx assuming we used runID as report ID in python.
-	path := filepath.Join("/tmp/reports", runID+".xlsx")
+	reportsDir := a.Cfg.ReportsDir
+	path := filepath.Join(reportsDir, runID+".xlsx")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		errJSON(w, http.StatusNotFound, "report file not found")
 		return

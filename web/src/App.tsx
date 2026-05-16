@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
-import { Link } from "react-router-dom";
-import { apiFetch } from "./api";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { apiFetch, getSSEUrl } from "./api";
 import { ResultTable } from "./ResultTable";
 
 type Session = { id: string; title: string };
@@ -14,11 +14,14 @@ type ApiMessage = {
 
 export function App() {
   const token = useMemo(() => localStorage.getItem("token"), []);
+  const navigate = useNavigate();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sid, setSid] = useState<string | null>(null);
   const [messages, setMessages] = useState<ApiMessage[]>([]);
   const [runSteps, setRunSteps] = useState<any[]>([]);
   const [sendStatus, setSendStatus] = useState<string>("");
+  const [deepAnalysis, setDeepAnalysis] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -45,32 +48,87 @@ export function App() {
     void loadMessages();
   }, [loadMessages]);
 
+  // Cleanup EventSource on unmount
+  useEffect(() => {
+    return () => {
+      esRef.current?.close();
+    };
+  }, []);
+
+  function startSSE(sessionId: string) {
+    // Close existing connection
+    esRef.current?.close();
+
+    // Fetch SSE token
+    apiFetch(`/v1/sessions/${sessionId}/sse-token`, { method: "POST", token })
+      .then(r => r.json())
+      .then(j => {
+        const url = getSSEUrl(sessionId, j.sse_token);
+        connectSSE(url, sessionId);
+      })
+      .catch(() => {
+        // Fallback: retry token fetch after 3s
+        setTimeout(() => startSSE(sessionId), 3000);
+      });
+  }
+
+  function connectSSE(url: string, sessionId: string) {
+    const es = new EventSource(url);
+    esRef.current = es;
+
+    es.addEventListener("result", (e) => {
+      es.close();
+      setSendStatus("完成");
+      loadMessages();
+    });
+
+    es.addEventListener("agent_step", (e) => {
+      try {
+        const step = JSON.parse(e.data);
+        setSendStatus(`[${step.agent_name}] ${step.status}`);
+      } catch { /* ignore parse errors */ }
+    });
+
+    es.addEventListener("approval_required", () => {
+      setSendStatus("需要审批");
+    });
+
+    es.addEventListener("error", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        setSendStatus(`错误: ${data.message || "unknown"}`);
+      } catch {
+        setSendStatus("错误");
+      }
+      es.close();
+      loadMessages();
+    });
+
+    es.onerror = () => {
+      es.close();
+      // Reconnect after 3 seconds
+      setTimeout(() => startSSE(sessionId), 3000);
+    };
+  }
+
   async function send(text: string) {
     if (!sid || !token) return;
-    setSendStatus("发送中…");
+    setSendStatus("发送中...");
+    const workflow = deepAnalysis ? "agent_pipeline" : "auto";
     const r = await apiFetch(`/v1/sessions/${sid}/messages`, {
       method: "POST",
       token,
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, workflow }),
     });
     const j = await r.json().catch(() => ({}));
-    setSendStatus(`${r.status} ${r.status === 200 ? "完成" : r.status === 202 ? "已进入后台处理" : "见下方"}`);
-    await loadMessages();
-    
-    if (r.status === 202 && j.task_id) {
-      setSendStatus(`任务处理中 (task: ${j.task_id})，轮询中...`);
-      const interval = setInterval(async () => {
-        const pollRes = await apiFetch(`/v1/tasks/${j.task_id}`, { token });
-        if (pollRes.ok) {
-          const pollJ = await pollRes.json();
-          if (pollJ.status === "succeeded" || pollJ.status === "failed" || pollJ.status === "expired") {
-            clearInterval(interval);
-            setSendStatus(`异步任务完成: ${pollJ.status}`);
-            await loadMessages();
-          }
-        }
-      }, 5000);
-    } else if (!r.ok && r.status !== 202) {
+
+    if (r.status === 202) {
+      setSendStatus(`任务处理中 (task: ${j.task_id})，SSE 监听中...`);
+      startSSE(sid);
+    } else if (r.ok) {
+      setSendStatus("完成");
+      await loadMessages();
+    } else {
       setSendStatus(`${r.status} ${typeof j === "string" ? j : JSON.stringify(j)}`);
     }
   }
@@ -79,14 +137,17 @@ export function App() {
     <div style={{ fontFamily: "system-ui", padding: 16, maxWidth: 960, margin: "0 auto" }}>
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 style={{ margin: 0 }}>DataFlowAgentHub</h1>
-        <Link to="/login" onClick={() => localStorage.removeItem("token")}>
-          退出
-        </Link>
+        <nav style={{ display: "flex", gap: 16, alignItems: "center" }}>
+          <Link to="/data-sources" style={{ fontSize: 14 }}>数据源</Link>
+          <Link to="/knowledge" style={{ fontSize: 14 }}>知识库</Link>
+          <Link to="/login" onClick={() => localStorage.removeItem("token")}>
+            退出
+          </Link>
+        </nav>
       </header>
       <p style={{ color: "#555", fontSize: 14 }}>
-        MVP：消息走 REST；SSE 需带鉴权头，浏览器原生 EventSource 不支持 Bearer，面试演示可用{" "}
-        <code>curl -N -H &quot;Authorization: Bearer …&quot;</code> 订阅{" "}
-        <code>/v1/sessions/&lt;id&gt;/stream</code>（见 docs/SMOKE_CHECKLIST.md）。
+        MVP：消息通过 REST + SSE 实时推送；异步任务通过 EventSource 订阅{" "}
+        <code>/v1/sessions/&lt;id&gt;/stream?token=&lt;sse_token&gt;</code>
       </p>
       <section style={{ marginTop: 16 }}>
         <h2>会话</h2>
@@ -131,8 +192,16 @@ export function App() {
               e.currentTarget.reset();
             }}
           >
-            <input name="t" placeholder="例如：how many rows in demo_sales" style={{ width: "70%" }} />
-            <button type="submit">发送</button>
+            <input name="t" placeholder="例如：how many rows in demo_sales" style={{ width: "60%" }} />
+            <label style={{ marginLeft: 12, fontSize: 14, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={deepAnalysis}
+                onChange={(e) => setDeepAnalysis(e.target.checked)}
+              />
+              {" "}深度分析
+            </label>
+            <button type="submit" style={{ marginLeft: 8 }}>发送</button>
           </form>
           {sendStatus ? (
             <p style={{ fontSize: 13, color: "#444", margin: "8px 0 0" }}>
@@ -143,7 +212,7 @@ export function App() {
             {messages.map((m) => (
               <MessageBlock key={m.id} msg={m} />
             ))}
-            
+
             {runSteps.length > 0 && (
               <div style={{ padding: 12, background: "#f8f9fa", borderRadius: 8, fontSize: 13, border: "1px dashed #ccc" }}>
                 <strong>中间执行步骤:</strong>
@@ -153,7 +222,7 @@ export function App() {
                       <span style={{color: step.status === 'running' ? '#10a37f' : step.status === 'failed' ? 'red' : '#555'}}>
                         [{step.agent_name}]
                       </span>{" "}
-                      {step.status}: {step.output_summary || step.input_summary} 
+                      {step.status}: {step.output_summary || step.input_summary}
                       {step.error_message && <span style={{color:'red'}}> (Error: {step.error_message})</span>}
                     </li>
                   ))}

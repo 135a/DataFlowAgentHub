@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dataflowagenthub/hub/internal/async"
 	"github.com/dataflowagenthub/hub/internal/auth"
 	"github.com/dataflowagenthub/hub/internal/config"
+	hubcrypto "github.com/dataflowagenthub/hub/internal/crypto"
 	"github.com/dataflowagenthub/hub/internal/middleware"
 	"github.com/dataflowagenthub/hub/internal/ratelimit"
 	"github.com/dataflowagenthub/hub/internal/schema"
@@ -21,6 +23,7 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
@@ -31,12 +34,14 @@ const version = "0.1.0-dev"
 
 // App wires HTTP dependencies.
 type App struct {
-	Cfg    *config.Config
-	Log    *zap.Logger
-	DB     *pgxpool.Pool
-	Redis  *redis.Client
-	Nl2sql *worker.NL2SQLClient
-	Bus    *ssebus.Bus
+	Cfg       *config.Config
+	Log       *zap.Logger
+	DB        *pgxpool.Pool
+	Redis     *redis.Client
+	Nl2sql    *worker.NL2SQLClient
+	Bus       *ssebus.Bus
+	NATS      *nats.Conn
+	AsyncTask *async.Client
 }
 
 func JSON(w http.ResponseWriter, status int, v any) {
@@ -139,6 +144,23 @@ func (a *App) ListSessions(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{"id": id, "title": title, "created_at": created.UTC().Format(time.RFC3339)})
 	}
 	JSON(w, http.StatusOK, map[string]any{"sessions": out})
+}
+
+func (a *App) SSEToken(w http.ResponseWriter, r *http.Request) {
+	c := middleware.ClaimsFromContext(r.Context())
+	sid := chi.URLParam(r, "sessionID")
+	var ws string
+	err := a.DB.QueryRow(r.Context(), `SELECT workspace_id::text FROM sessions WHERE id = $1::uuid`, sid).Scan(&ws)
+	if err != nil || ws != c.WorkspaceID {
+		errJSON(w, http.StatusNotFound, "session not found")
+		return
+	}
+	tok, err := auth.SignSSEToken(a.Cfg.JWTSecret, c.UserID, ws, sid)
+	if err != nil {
+		errJSON(w, http.StatusInternalServerError, "sse token")
+		return
+	}
+	JSON(w, http.StatusOK, map[string]any{"sse_token": tok, "expires_in": 3600})
 }
 
 func (a *App) ListMessages(w http.ResponseWriter, r *http.Request) {
@@ -253,7 +275,8 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Text string `json:"text"`
+		Text     string `json:"text"`
+		Workflow string `json:"workflow"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Text) == "" {
 		errJSON(w, http.StatusBadRequest, "text required")
@@ -311,7 +334,13 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 			errJSON(w, http.StatusInternalServerError, "data source not found")
 			return
 		}
-		extPool, connErr := schema.ConnectToExternalDataSource(ctx, host, port, db, user, pwd, ssl)
+		decryptedPwd, decErr := hubcrypto.Decrypt(pwd, a.Cfg.DBEncryptionKey)
+		if decErr != nil {
+			a.Log.Error("decrypt datasource password", zap.Error(decErr))
+			errJSON(w, http.StatusInternalServerError, "failed to decrypt datasource password")
+			return
+		}
+		extPool, connErr := schema.ConnectToExternalDataSource(ctx, host, port, db, user, decryptedPwd, ssl)
 		if connErr != nil {
 			errJSON(w, http.StatusBadGateway, "schema discovery: cannot connect to data source: "+connErr.Error())
 			return
@@ -332,24 +361,21 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 
 	a.Bus.Publish(sid, ssebus.Event{Type: "run_started", Data: map[string]string{"run_id": rid}})
 
-	// 9.2 Route to async if complex
-	if strings.Contains(low, "分析") || strings.Contains(low, "报告") || strings.Contains(low, "analyze") || strings.Contains(low, "report") {
-		// Enqueue async
-		payload := map[string]any{
+	// 9.2 Route to async if complex (keyword detection or explicit workflow parameter)
+	workflow := strings.ToLower(strings.TrimSpace(body.Workflow))
+	if workflow == "" {
+		workflow = "auto"
+	}
+
+	isComplex := strings.Contains(low, "分析") || strings.Contains(low, "报告") ||
+		strings.Contains(low, "analyze") || strings.Contains(low, "report")
+	useAgentPipeline := (workflow == "agent_pipeline") || (workflow == "auto" && isComplex)
+
+	if useAgentPipeline {
+		taskID, err := a.AsyncTask.EnqueueTask(ctx, c.WorkspaceID, sid, rid, "agent_pipeline", map[string]any{
 			"user_message": body.Text,
 			"schema_json":  schemaJSON,
-		}
-		// ... (rest of async enqueue remains the same)
-		// Assuming a.Async is an initialized *async.Client
-		// For MVP we just use direct insert if a.Async isn't set up yet,
-		// but let's assume it's set up in App (will need to inject it).
-		// We can just use the DB directly here for MVP to avoid circular deps.
-		taskID := uuid.NewString()
-		payloadJSON, _ := json.Marshal(payload)
-		_, err := a.DB.Exec(ctx, `
-			INSERT INTO async_tasks (id, workspace_id, session_id, run_id, task_type, payload, status)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'agent_pipeline', $5, 'queued')`,
-			taskID, c.WorkspaceID, sid, rid, payloadJSON)
+		})
 		if err != nil {
 			a.finishRunFailed(ctx, rid, sid, "failed to enqueue task: "+err.Error(), codes.Internal)
 			errJSON(w, http.StatusInternalServerError, "enqueue error")
@@ -532,6 +558,60 @@ func (a *App) DecideApproval(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]string{"status": st})
 }
 
+// InternalNL2SQL is called by the Python orchestrator's nl2sql_node to execute NL2SQL
+// via Go's secure boundary (gRPC → sqlrun). It receives user_message, schema_json, and trace_id,
+// calls the Python worker's GenerateSQL RPC, executes the returned SQL (read-only), and returns results.
+// InternalNL2SQL is called by the Python orchestrator's nl2sql_node.
+// Authentication is handled by InternalHMACAuth middleware.
+func (a *App) InternalNL2SQL(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TraceID     string `json:"trace_id"`
+		UserMessage string `json:"user_message"`
+		SchemaJSON  string `json:"schema_json"`
+		Dialect     string `json:"dialect"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if body.UserMessage == "" {
+		errJSON(w, http.StatusBadRequest, "user_message is required")
+		return
+	}
+	if body.Dialect == "" {
+		body.Dialect = "postgres"
+	}
+
+	traceID := body.TraceID
+	if traceID == "" {
+		traceID = middleware.TraceFromContext(r.Context())
+	}
+
+	gen, err := a.Nl2sql.GenerateSQL(r.Context(), traceID, "", body.UserMessage, body.SchemaJSON, body.Dialect)
+	if err != nil {
+		a.Log.Error("internal nl2sql: gRPC GenerateSQL failed", zap.Error(err))
+		errJSON(w, http.StatusBadGateway, "nl2sql worker error: "+err.Error())
+		return
+	}
+	if !gen.GetOk() {
+		errJSON(w, http.StatusBadRequest, gen.GetErrorMessage())
+		return
+	}
+
+	sql := strings.TrimSpace(gen.GetSql())
+	rows, err := sqlrun.QueryRows(r.Context(), a.DB, sql, a.Cfg.QueryMaxRows, a.Cfg.QueryTimeout)
+	if err != nil {
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	JSON(w, http.StatusOK, map[string]any{
+		"sql":   sql,
+		"rows":  rows,
+		"notes": gen.GetSelfCheckNotes(),
+	})
+}
+
 // Routes builds the chi router.
 func Routes(a *App) http.Handler {
 	r := chi.NewRouter()
@@ -546,12 +626,13 @@ func Routes(a *App) http.Handler {
 	r.Post("/v1/auth/login", a.Login)
 
 	r.Route("/v1", func(r chi.Router) {
-		r.Use(middleware.Auth(a.Cfg, a.Log))
+		r.Use(middleware.Auth(a.Cfg, a.Log, a.Redis))
 		r.Get("/sessions", a.ListSessions)
 		r.Post("/sessions", a.CreateSession)
 		r.Get("/sessions/{sessionID}/messages", a.ListMessages)
 		r.Post("/sessions/{sessionID}/messages", a.PostMessage)
 		r.Get("/sessions/{sessionID}/stream", a.SessionStream)
+		r.Post("/sessions/{sessionID}/sse-token", a.SSEToken)
 		r.Get("/data-sources", a.ListDataSources)
 		r.With(middleware.RequireMinRole("operator")).Post("/data-sources", a.CreateDataSource)
 		r.With(middleware.RequireMinRole("operator")).Post("/data-sources/{id}/test", a.TestDataSource)
@@ -566,8 +647,11 @@ func Routes(a *App) http.Handler {
 	})
 
 	r.Route("/internal", func(r chi.Router) {
+		r.Use(middleware.InternalHMACAuth(a.Cfg.InternalHMACSecret))
 		r.Post("/tasks/{taskID}/callback", a.TaskCallback)
 		r.Post("/runs/{runID}/steps", a.RunStepCallback)
+		r.Post("/nl2sql", a.InternalNL2SQL)
+		r.Patch("/knowledge-docs/{docID}/status", a.KnowledgeDocCallback)
 	})
 
 	return r

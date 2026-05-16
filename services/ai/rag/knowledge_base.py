@@ -15,10 +15,12 @@ class KnowledgeBase:
         chroma_host = os.environ.get("CHROMA_HOST", "localhost")
         chroma_port = os.environ.get("CHROMA_PORT", "8000")
         
+        hub_env = os.environ.get("HUB_ENV", "development")
+        allow_reset = hub_env != "production"
         self.client = chromadb.HttpClient(
-            host=chroma_host, 
+            host=chroma_host,
             port=chroma_port,
-            settings=Settings(allow_reset=True)
+            settings=Settings(allow_reset=allow_reset)
         )
         
         # We use a collection per workspace for data isolation

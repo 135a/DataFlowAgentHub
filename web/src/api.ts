@@ -15,3 +15,7 @@ export async function apiFetch(
   h.set("Content-Type", "application/json");
   return fetch(apiUrl(path), { ...rest, headers: h });
 }
+
+export function getSSEUrl(sessionId: string, sseToken: string): string {
+  return apiUrl(`/v1/sessions/${sessionId}/stream?token=${encodeURIComponent(sseToken)}`);
+}

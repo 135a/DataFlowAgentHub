@@ -27,6 +27,12 @@ type Config struct {
 	SchemaCacheTTL           time.Duration
 	SchemaMaxTables          int32
 	SchemaMaxColumnsPerTable int32
+	InternalHMACSecret       string
+	DBEncryptionKey          string
+	ReportsDir               string
+	OTelExporterEndpoint     string
+	Env                      string
+	NATSURL                  string
 }
 
 func getenv(key, def string) string {
@@ -67,6 +73,14 @@ func Load() (*Config, error) {
 	if sec == "" {
 		return nil, fmt.Errorf("HUB_JWT_SECRET is required")
 	}
+	hmacSec := os.Getenv("HUB_INTERNAL_HMAC_SECRET")
+	if hmacSec == "" {
+		return nil, fmt.Errorf("HUB_INTERNAL_HMAC_SECRET is required")
+	}
+	dbEncKey := os.Getenv("HUB_DB_ENCRYPTION_KEY")
+	if dbEncKey == "" {
+		return nil, fmt.Errorf("HUB_DB_ENCRYPTION_KEY is required (32-byte hex-encoded key)")
+	}
 	c := &Config{
 		HTTPAddr:                 getenv("HUB_HTTP_ADDR", ":8080"),
 		DatabaseURL:              getenv("HUB_DATABASE_URL", "postgres://hub:hub@localhost:5432/hub?sslmode=disable"),
@@ -86,6 +100,12 @@ func Load() (*Config, error) {
 		SchemaCacheTTL:           mustDur("HUB_SCHEMA_CACHE_TTL", 300*time.Second),
 		SchemaMaxTables:          mustInt32("HUB_SCHEMA_MAX_TABLES", 50),
 		SchemaMaxColumnsPerTable: mustInt32("HUB_SCHEMA_MAX_COLUMNS_PER_TABLE", 100),
+		InternalHMACSecret:       hmacSec,
+		DBEncryptionKey:          dbEncKey,
+		ReportsDir:               getenv("HUB_REPORTS_DIR", os.TempDir()+"/hub-reports/"),
+		OTelExporterEndpoint:     os.Getenv("HUB_OTEL_EXPORTER_ENDPOINT"),
+		Env:                      getenv("HUB_ENV", "development"),
+		NATSURL:                  getenv("HUB_NATS_URL", "nats://localhost:4222"),
 	}
 	return c, nil
 }

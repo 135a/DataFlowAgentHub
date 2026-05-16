@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NL2SQLService_GenerateSQL_FullMethodName = "/nl2sql.v1.NL2SQLService/GenerateSQL"
-	NL2SQLService_Health_FullMethodName      = "/nl2sql.v1.NL2SQLService/Health"
+	NL2SQLService_GenerateSQL_FullMethodName      = "/nl2sql.v1.NL2SQLService/GenerateSQL"
+	NL2SQLService_RunAgentPipeline_FullMethodName = "/nl2sql.v1.NL2SQLService/RunAgentPipeline"
+	NL2SQLService_Health_FullMethodName           = "/nl2sql.v1.NL2SQLService/Health"
 )
 
 // NL2SQLServiceClient is the client API for NL2SQLService service.
@@ -30,6 +31,7 @@ const (
 // NL2SQLService is invoked by the Go control plane to generate SQL on the Python worker.
 type NL2SQLServiceClient interface {
 	GenerateSQL(ctx context.Context, in *GenerateSQLRequest, opts ...grpc.CallOption) (*GenerateSQLResponse, error)
+	RunAgentPipeline(ctx context.Context, in *RunAgentPipelineRequest, opts ...grpc.CallOption) (*RunAgentPipelineResponse, error)
 	Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 }
 
@@ -45,6 +47,16 @@ func (c *nL2SQLServiceClient) GenerateSQL(ctx context.Context, in *GenerateSQLRe
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GenerateSQLResponse)
 	err := c.cc.Invoke(ctx, NL2SQLService_GenerateSQL_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nL2SQLServiceClient) RunAgentPipeline(ctx context.Context, in *RunAgentPipelineRequest, opts ...grpc.CallOption) (*RunAgentPipelineResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RunAgentPipelineResponse)
+	err := c.cc.Invoke(ctx, NL2SQLService_RunAgentPipeline_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +80,7 @@ func (c *nL2SQLServiceClient) Health(ctx context.Context, in *HealthRequest, opt
 // NL2SQLService is invoked by the Go control plane to generate SQL on the Python worker.
 type NL2SQLServiceServer interface {
 	GenerateSQL(context.Context, *GenerateSQLRequest) (*GenerateSQLResponse, error)
+	RunAgentPipeline(context.Context, *RunAgentPipelineRequest) (*RunAgentPipelineResponse, error)
 	Health(context.Context, *HealthRequest) (*HealthResponse, error)
 	mustEmbedUnimplementedNL2SQLServiceServer()
 }
@@ -81,6 +94,9 @@ type UnimplementedNL2SQLServiceServer struct{}
 
 func (UnimplementedNL2SQLServiceServer) GenerateSQL(context.Context, *GenerateSQLRequest) (*GenerateSQLResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GenerateSQL not implemented")
+}
+func (UnimplementedNL2SQLServiceServer) RunAgentPipeline(context.Context, *RunAgentPipelineRequest) (*RunAgentPipelineResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunAgentPipeline not implemented")
 }
 func (UnimplementedNL2SQLServiceServer) Health(context.Context, *HealthRequest) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
@@ -124,6 +140,24 @@ func _NL2SQLService_GenerateSQL_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NL2SQLService_RunAgentPipeline_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunAgentPipelineRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NL2SQLServiceServer).RunAgentPipeline(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NL2SQLService_RunAgentPipeline_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NL2SQLServiceServer).RunAgentPipeline(ctx, req.(*RunAgentPipelineRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _NL2SQLService_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HealthRequest)
 	if err := dec(in); err != nil {
@@ -152,6 +186,10 @@ var NL2SQLService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GenerateSQL",
 			Handler:    _NL2SQLService_GenerateSQL_Handler,
+		},
+		{
+			MethodName: "RunAgentPipeline",
+			Handler:    _NL2SQLService_RunAgentPipeline_Handler,
 		},
 		{
 			MethodName: "Health",

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/dataflowagenthub/hub/internal/async"
 	"github.com/dataflowagenthub/hub/internal/config"
 	"github.com/dataflowagenthub/hub/internal/handlers"
 	"github.com/dataflowagenthub/hub/internal/migrate"
@@ -18,12 +20,16 @@ import (
 	"github.com/dataflowagenthub/hub/internal/ssebus"
 	"github.com/dataflowagenthub/hub/internal/worker"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
 func main() {
-	zl, _ := zap.NewProduction()
+	zl, err := zap.NewProduction()
+	if err != nil {
+		log.Fatalf("failed to initialize logger: %v", err)
+	}
 	defer func() { _ = zl.Sync() }()
 
 	cfg, err := config.Load()
@@ -59,13 +65,20 @@ func main() {
 	}
 	defer func() { _ = conn.Close() }()
 
+	nc, err := nats.Connect(cfg.NATSURL)
+	if err != nil {
+		zl.Warn("nats connect failed, async tasks disabled", zap.Error(err))
+	}
+
 	app := &handlers.App{
-		Cfg:    cfg,
-		Log:    zl,
-		DB:     pool,
-		Redis:  rdb,
-		Nl2sql: nl,
-		Bus:    ssebus.New(),
+		Cfg:       cfg,
+		Log:       zl,
+		DB:        pool,
+		Redis:     rdb,
+		Nl2sql:    nl,
+		Bus:       ssebus.New(),
+		NATS:      nc,
+		AsyncTask: async.NewClient(pool, nc, zl),
 	}
 
 	otelShutdown, err := otelsetup.Init()

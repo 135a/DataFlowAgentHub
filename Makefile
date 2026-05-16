@@ -1,4 +1,4 @@
-.PHONY: gen-go gen-py tidy test
+.PHONY: gen-go gen-py tidy test test-py
 
 PROTO := api/proto
 PYOUT := services/ai/gen
@@ -24,3 +24,6 @@ tidy:
 
 test:
 	go test ./...
+
+test-py:
+	cd services/ai && python -m pytest tests/ -v

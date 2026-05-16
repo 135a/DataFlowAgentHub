@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 type Claims struct {
@@ -23,6 +24,26 @@ func Sign(secret []byte, userID, workspaceID, role string, ttl time.Duration) (s
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 			IssuedAt:  jwt.NewNumericDate(now),
+			ID:        uuid.NewString(),
+		},
+	}
+	t := jwt.NewWithClaims(jwt.SigningMethodHS256, c)
+	return t.SignedString(secret)
+}
+
+// SignSSEToken issues a short-lived token for SSE EventSource connections.
+// The token has minimal scope: it only allows subscribing to a specific session's events.
+func SignSSEToken(secret []byte, userID, workspaceID, sessionID string) (string, error) {
+	now := time.Now()
+	c := Claims{
+		UserID:      userID,
+		WorkspaceID: workspaceID,
+		Role:        "viewer",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(now.Add(1 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			ID:        uuid.NewString(),
+			Subject:   sessionID,
 		},
 	}
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, c)

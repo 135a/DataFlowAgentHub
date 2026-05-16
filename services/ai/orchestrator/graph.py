@@ -1,4 +1,9 @@
+import httpx
+import json
+import hmac
+import hashlib
 import logging
+import os
 from typing import Literal
 
 from langgraph.graph import StateGraph, START, END
@@ -13,59 +18,99 @@ from agents.report_generation_agent import report_generation_node
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
-# Mock NL2SQL Node (to be replaced with actual grpc invocation or direct logic)
+
 def nl2sql_node(state: AgentState) -> dict:
+    """Execute NL2SQL by calling Go API's /internal/nl2sql endpoint."""
     with tracer.start_as_current_span("nl2sql_node"):
-        logger.info("Executing NL2SQL Agent (Mock for Orchestrator)")
         run_id = state.get("run_id", "")
-        report_run_step(run_id, "nl2sql_agent", "running", "Started NL2SQL node")
-    
-    # Since the system already has a Go -> Python NL2SQL gRPC flow, 
-    # we can either reuse the same logic or let Go inject the nl2sql_result directly.
-    # We will assume `nl2sql_result` is populated either before graph execution
-    # or by this node executing the actual SQL.
-    # For now, it's a pass-through if already populated.
-    if not state.get("nl2sql_result"):
-        # Dummy data if no result was provided
-        report_run_step(run_id, "nl2sql_agent", "succeeded", output_summary="Mocked result")
-        return {"nl2sql_result": [{"mock_col": 1, "value": 100}]}
-        
-    report_run_step(run_id, "nl2sql_agent", "succeeded", output_summary="Used existing result")
-    return {}
+        report_run_step(run_id, "nl2sql_agent", "running", "Calling NL2SQL via Go API")
+
+        user_input = state.get("user_input", "")
+        schema_context = state.get("schema_context", "{}")
+
+        api_url = os.environ.get("HUB_API_INTERNAL_URL", "http://api:8080")
+        secret = os.environ.get("HUB_INTERNAL_HMAC_SECRET", "dev-hmac-secret-change-me")
+
+        try:
+            body = {
+                "user_message": user_input,
+                "schema_json": schema_context,
+                "dialect": "postgres",
+            }
+            body_bytes = json.dumps(body).encode()
+            mac = hmac.new(secret.encode(), body_bytes, hashlib.sha256)
+            headers = {
+                "X-Hub-Signature": f"sha256={mac.hexdigest()}",
+                "Content-Type": "application/json",
+            }
+
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.post(
+                    f"{api_url}/internal/nl2sql",
+                    headers=headers,
+                    content=body_bytes,
+                )
+                resp.raise_for_status()
+                result = resp.json()
+                rows = result.get("rows", [])
+                sql = result.get("sql", "")
+                logger.info(f"NL2SQL returned {len(rows)} rows, SQL: {sql[:200]}")
+                report_run_step(
+                    run_id, "nl2sql_agent", "succeeded",
+                    output_summary=f"Generated SQL, returned {len(rows)} rows"
+                )
+                return {"nl2sql_result": rows, "nl2sql_sql": sql}
+
+        except Exception as e:
+            logger.error(f"NL2SQL node failed: {e}")
+            report_run_step(
+                run_id, "nl2sql_agent", "failed",
+                error_message=str(e)
+            )
+            return {"nl2sql_error": str(e)}
+
 
 def route_next(state: AgentState) -> Literal["analysis_node", "report_node", "__end__"]:
-    # Simple rule-based routing based on user input intent
+    """Route to next node based on user input keywords and workflow parameter."""
     user_input = state.get("user_input", "").lower()
-    
-    if "分析" in user_input or "analyze" in user_input or "trend" in user_input:
-        return "analysis_node"
-    elif "报告" in user_input or "report" in user_input or "export" in user_input:
-        return "report_node"
-    else:
+    workflow = state.get("workflow", "auto")
+
+    # Explicit workflow parameter takes priority
+    if workflow == "simple":
         return "__end__"
+
+    if workflow == "agent_pipeline":
+        return "analysis_node"
+
+    # Auto: keyword-based routing (supports both Chinese and English)
+    analyze_kw = ("分析", "analyze", "trend", "趋势", "对比", "compare")
+    report_kw = ("报告", "report", "export", "导出", "简报")
+
+    if any(kw in user_input for kw in analyze_kw):
+        return "analysis_node"
+    elif any(kw in user_input for kw in report_kw):
+        return "report_node"
+
+    # Default: end after nl2sql (no further agents needed)
+    return "__end__"
+
 
 def build_graph():
     builder = StateGraph(AgentState)
-    
-    # 6.2 Register Nodes
+
     builder.add_node("nl2sql_node", nl2sql_node)
     builder.add_node("analysis_node", data_analysis_node)
     builder.add_node("report_node", report_generation_node)
-    
-    # Define edges
+
     builder.add_edge(START, "nl2sql_node")
-    
-    # 6.3 Conditional Edges
     builder.add_conditional_edges("nl2sql_node", route_next)
-    
     builder.add_edge("analysis_node", "report_node")
     builder.add_edge("report_node", END)
-    
-    # 6.4 Checkpointer
+
     memory = MemorySaver()
-    
     graph = builder.compile(checkpointer=memory)
     return graph
+
 
 # Global graph instance
 workflow_graph = build_graph()

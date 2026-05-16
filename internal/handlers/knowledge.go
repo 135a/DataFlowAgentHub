@@ -4,8 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/dataflowagenthub/hub/internal/middleware"
@@ -24,9 +24,9 @@ func (a *App) ListKnowledgeDocs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := a.DB.Query(r.Context(), `
-		SELECT id::text, title, doc_type, status, created_at 
-		FROM knowledge_docs 
-		WHERE workspace_id = $1::uuid 
+		SELECT id::text, title, doc_type, status, created_at
+		FROM knowledge_docs
+		WHERE workspace_id = $1::uuid
 		ORDER BY created_at DESC`, wsID)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "db error")
@@ -54,7 +54,7 @@ func (a *App) ListKnowledgeDocs(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]any{"docs": docs})
 }
 
-// UploadKnowledgeDoc receives text/markdown and enqueues it for chroma indexing (MVP: we'll index it asynchronously or directly here. Actually, to keep it simple, we just save it to DB and schedule an async task to Python to index it).
+// UploadKnowledgeDoc receives text/markdown and enqueues it for chroma indexing.
 func (a *App) UploadKnowledgeDoc(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
 	wsID := chi.URLParam(r, "workspaceID")
@@ -79,7 +79,7 @@ func (a *App) UploadKnowledgeDoc(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Insert into DB
 	_, err := a.DB.Exec(r.Context(), `
-		INSERT INTO knowledge_docs (id, workspace_id, title, content_hash, created_by, status) 
+		INSERT INTO knowledge_docs (id, workspace_id, title, content_hash, created_by, status)
 		VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid, 'pending')`,
 		docID, wsID, body.Title, hashStr, c.UserID)
 	if err != nil {
@@ -88,27 +88,54 @@ func (a *App) UploadKnowledgeDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Schedule async task to index (Python worker will process it)
-	payload, _ := json.Marshal(map[string]any{
-		"action":  "index_document",
-		"doc_id":  docID,
-		"title":   body.Title,
-		"content": body.Content,
+	// 2. Enqueue async task via async.Client (writes to DB + publishes to NATS)
+	taskID, err := a.AsyncTask.EnqueueTask(r.Context(), wsID, "", "", "knowledge_index", map[string]any{
+		"action":   "index_document",
+		"doc_id":   docID,
+		"title":    body.Title,
+		"content":  body.Content,
+		"doc_type": "markdown",
 	})
-
-	taskID := uuid.NewString()
-	_, err = a.DB.Exec(r.Context(), `
-		INSERT INTO async_tasks (id, workspace_id, task_type, payload) 
-		VALUES ($1::uuid, $2::uuid, 'index_knowledge', $3)`,
-		taskID, wsID, payload)
-
 	if err != nil {
-		a.Log.Error("insert async task", zap.Error(err))
-		errJSON(w, http.StatusInternalServerError, "db async task")
+		a.Log.Error("enqueue knowledge task", zap.Error(err))
+		errJSON(w, http.StatusInternalServerError, "failed to enqueue indexing task")
 		return
 	}
 
-	// TODO: Publish task to NATS
-
 	JSON(w, http.StatusAccepted, map[string]any{"id": docID, "task_id": taskID, "status": "pending"})
+}
+
+// KnowledgeDocCallback is an internal endpoint for the Python worker to update document indexing status.
+// Authentication is handled by InternalHMACAuth middleware.
+func (a *App) KnowledgeDocCallback(w http.ResponseWriter, r *http.Request) {
+	docID := chi.URLParam(r, "docID")
+	var body struct {
+		Status       string `json:"status"` // 'completed' or 'failed'
+		ChromaDocID  string `json:"chroma_doc_id"`
+		ChunkCount   int    `json:"chunk_count"`
+		ErrorMessage string `json:"error_message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	status := strings.ToLower(body.Status)
+	if status != "completed" && status != "failed" {
+		errJSON(w, http.StatusBadRequest, "invalid status")
+		return
+	}
+
+	_, err := a.DB.Exec(r.Context(), `
+		UPDATE knowledge_docs
+		SET status = $2, chroma_doc_id = $3, chunk_count = $4, updated_at = now()
+		WHERE id = $1::uuid`,
+		docID, status, body.ChromaDocID, body.ChunkCount)
+	if err != nil {
+		a.Log.Error("update knowledge doc", zap.Error(err))
+		errJSON(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	JSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }

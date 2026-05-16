@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/dataflowagenthub/hub/internal/middleware"
+	"github.com/dataflowagenthub/hub/internal/ssebus"
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 )
@@ -48,15 +49,9 @@ func (a *App) TaskStatus(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, res)
 }
 
-// TaskCallback is an internal endpoint for workers to report task results
+// TaskCallback is an internal endpoint for workers to report task results.
+// Authentication is handled by InternalHMACAuth middleware.
 func (a *App) TaskCallback(w http.ResponseWriter, r *http.Request) {
-	// Secret check
-	authHeader := r.Header.Get("X-Hub-Internal-Secret")
-	if authHeader == "" || authHeader != a.Cfg.InternalHMACSecret {
-		errJSON(w, http.StatusUnauthorized, "invalid internal secret")
-		return
-	}
-
 	taskID := chi.URLParam(r, "taskID")
 
 	var body struct {
@@ -117,14 +112,9 @@ func (a *App) TaskCallback(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
 
-// RunStepCallback is an internal endpoint to track LangGraph steps
+// RunStepCallback is an internal endpoint to track LangGraph steps.
+// Authentication is handled by InternalHMACAuth middleware.
 func (a *App) RunStepCallback(w http.ResponseWriter, r *http.Request) {
-	authHeader := r.Header.Get("X-Hub-Internal-Secret")
-	if authHeader == "" || authHeader != a.Cfg.InternalHMACSecret {
-		errJSON(w, http.StatusUnauthorized, "invalid internal secret")
-		return
-	}
-
 	runID := chi.URLParam(r, "runID")
 	var body struct {
 		AgentName     string `json:"agent_name"`
