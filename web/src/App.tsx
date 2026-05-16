@@ -1,54 +1,58 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { apiFetch, getSSEUrl } from "./api";
+import { Link } from "react-router-dom";
+import { apiFetch, apiJson, getSSEUrl } from "./api";
 import { ResultTable } from "./ResultTable";
-
-type Session = { id: string; title: string };
-
-type ApiMessage = {
-  id: string;
-  role: string;
-  content: unknown;
-  created_at: string;
-};
+import type {
+  Session,
+  ApiMessage,
+  MessageContent,
+  RunStep,
+  ApprovalTask,
+  SessionsResponse,
+  MessagesResponse,
+  CreateSessionResponse,
+  ApprovalsResponse,
+  SSETokenResponse,
+  PostMessageResponse,
+} from "./types/api";
 
 export function App() {
   const token = useMemo(() => localStorage.getItem("token"), []);
-  const navigate = useNavigate();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sid, setSid] = useState<string | null>(null);
   const [messages, setMessages] = useState<ApiMessage[]>([]);
-  const [runSteps, setRunSteps] = useState<any[]>([]);
+  const [runSteps, setRunSteps] = useState<RunStep[]>([]);
   const [sendStatus, setSendStatus] = useState<string>("");
   const [deepAnalysis, setDeepAnalysis] = useState(false);
+  const [sending, setSending] = useState(false);
   const esRef = useRef<EventSource | null>(null);
+  const sseRetries = useRef(0);
 
   useEffect(() => {
     void (async () => {
-      const r = await apiFetch("/v1/sessions", { token: token! });
-      const j = await r.json();
-      setSessions(j.sessions || []);
+      try {
+        const j = await apiJson<SessionsResponse>("/v1/sessions", { token: token! });
+        setSessions(j.sessions || []);
+      } catch { /* sessions load failure is non-fatal */ }
     })();
   }, [token]);
 
   const loadMessages = useCallback(async () => {
     if (!sid || !token) return;
-    const r = await apiFetch(`/v1/sessions/${sid}/messages`, { token });
-    if (!r.ok) {
+    try {
+      const j = await apiJson<MessagesResponse>(`/v1/sessions/${sid}/messages`, { token });
+      setMessages(j.messages || []);
+      setRunSteps(j.run_steps || []);
+    } catch {
       setMessages([]);
       setRunSteps([]);
-      return;
     }
-    const j = await r.json();
-    setMessages(j.messages || []);
-    setRunSteps(j.run_steps || []);
   }, [sid, token]);
 
   useEffect(() => {
     void loadMessages();
   }, [loadMessages]);
 
-  // Cleanup EventSource on unmount
   useEffect(() => {
     return () => {
       esRef.current?.close();
@@ -56,35 +60,40 @@ export function App() {
   }, []);
 
   function startSSE(sessionId: string) {
-    // Close existing connection
     esRef.current?.close();
 
-    // Fetch SSE token
-    apiFetch(`/v1/sessions/${sessionId}/sse-token`, { method: "POST", token })
-      .then(r => r.json())
+    apiJson<SSETokenResponse>(`/v1/sessions/${sessionId}/sse-token`, { method: "POST", token })
       .then(j => {
         const url = getSSEUrl(sessionId, j.sse_token);
         connectSSE(url, sessionId);
       })
       .catch(() => {
-        // Fallback: retry token fetch after 3s
-        setTimeout(() => startSSE(sessionId), 3000);
+        const delay = backoffDelay();
+        setTimeout(() => startSSE(sessionId), delay);
       });
   }
 
+  function backoffDelay(): number {
+    const delay = Math.min(1000 * Math.pow(2, sseRetries.current), 30000);
+    sseRetries.current += 1;
+    return delay;
+  }
+
   function connectSSE(url: string, sessionId: string) {
+    sseRetries.current = 0; // reset on successful connection
     const es = new EventSource(url);
     esRef.current = es;
 
-    es.addEventListener("result", (e) => {
+    es.addEventListener("result", () => {
       es.close();
       setSendStatus("完成");
+      setSending(false);
       loadMessages();
     });
 
     es.addEventListener("agent_step", (e) => {
       try {
-        const step = JSON.parse(e.data);
+        const step = JSON.parse((e as MessageEvent).data) as RunStep;
         setSendStatus(`[${step.agent_name}] ${step.status}`);
       } catch { /* ignore parse errors */ }
     });
@@ -95,7 +104,7 @@ export function App() {
 
     es.addEventListener("error", (e) => {
       try {
-        const data = JSON.parse(e.data);
+        const data = JSON.parse((e as MessageEvent).data) as { message?: string };
         setSendStatus(`错误: ${data.message || "unknown"}`);
       } catch {
         setSendStatus("错误");
@@ -106,30 +115,38 @@ export function App() {
 
     es.onerror = () => {
       es.close();
-      // Reconnect after 3 seconds
-      setTimeout(() => startSSE(sessionId), 3000);
+      const delay = backoffDelay();
+      setTimeout(() => startSSE(sessionId), delay);
     };
   }
 
   async function send(text: string) {
     if (!sid || !token) return;
     setSendStatus("发送中...");
+    setSending(true);
     const workflow = deepAnalysis ? "agent_pipeline" : "auto";
-    const r = await apiFetch(`/v1/sessions/${sid}/messages`, {
-      method: "POST",
-      token,
-      body: JSON.stringify({ text, workflow }),
-    });
-    const j = await r.json().catch(() => ({}));
+    try {
+      const r = await apiFetch(`/v1/sessions/${sid}/messages`, {
+        method: "POST",
+        token,
+        body: JSON.stringify({ text, workflow }),
+      });
 
-    if (r.status === 202) {
-      setSendStatus(`任务处理中 (task: ${j.task_id})，SSE 监听中...`);
-      startSSE(sid);
-    } else if (r.ok) {
-      setSendStatus("完成");
-      await loadMessages();
-    } else {
-      setSendStatus(`${r.status} ${typeof j === "string" ? j : JSON.stringify(j)}`);
+      if (r.status === 202) {
+        const j = await r.json() as PostMessageResponse;
+        setSendStatus(`任务处理中 (task: ${j.task_id})，SSE 监听中...`);
+        startSSE(sid);
+      } else if (r.ok) {
+        setSendStatus("完成");
+        setSending(false);
+        await loadMessages();
+      } else {
+        setSendStatus(`${r.status}`);
+        setSending(false);
+      }
+    } catch {
+      setSendStatus("网络错误，请重试");
+      setSending(false);
     }
   }
 
@@ -154,14 +171,15 @@ export function App() {
         <button
           type="button"
           onClick={async () => {
-            const r = await apiFetch("/v1/sessions", {
-              method: "POST",
-              token: token!,
-              body: JSON.stringify({ title: "新会话" }),
-            });
-            const j = await r.json();
-            setSessions((s) => [{ id: j.id, title: j.title }, ...s]);
-            setSid(j.id);
+            try {
+              const j = await apiJson<CreateSessionResponse>("/v1/sessions", {
+                method: "POST",
+                token: token!,
+                body: JSON.stringify({ title: "新会话" }),
+              });
+              setSessions((s) => [{ id: j.id, title: j.title }, ...s]);
+              setSid(j.id);
+            } catch { /* ignore */ }
           }}
         >
           新建
@@ -201,7 +219,7 @@ export function App() {
               />
               {" "}深度分析
             </label>
-            <button type="submit" style={{ marginLeft: 8 }}>发送</button>
+            <button type="submit" style={{ marginLeft: 8 }} disabled={sending}>发送</button>
           </form>
           {sendStatus ? (
             <p style={{ fontSize: 13, color: "#444", margin: "8px 0 0" }}>
@@ -262,14 +280,14 @@ function MessageBlock({ msg }: { msg: ApiMessage }) {
   );
 }
 
-function MessageBody({ content }: { content: unknown }) {
+function MessageBody({ content }: { content: MessageContent }) {
   if (content === null || content === undefined) {
     return <span style={{ opacity: 0.7 }}>（空）</span>;
   }
   if (typeof content !== "object") {
     return <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{String(content)}</pre>;
   }
-  const c = content as Record<string, unknown>;
+  const c = content as unknown as Record<string, unknown>;
 
   if (typeof c.text === "string") {
     return <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{c.text}</p>;
@@ -321,9 +339,9 @@ function MessageBody({ content }: { content: unknown }) {
   }
 
   if (c.final_report) {
-    const reportObj = c.final_report as any;
-    const finalReportText = reportObj.final_report || "";
-    const runId = c.run_id;
+    const reportObj = c.final_report as Record<string, unknown>;
+    const finalReportText = String(reportObj.final_report || "");
+    const runId = c.run_id as string | undefined;
     return (
       <div>
         <strong style={{ fontSize: 12 }}>生成报告</strong>
@@ -345,15 +363,14 @@ function MessageBody({ content }: { content: unknown }) {
 }
 
 function Approvals({ token }: { token: string }) {
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<ApprovalTask[]>([]);
   const load = async () => {
-    const r = await apiFetch("/v1/approvals", { token });
-    if (!r.ok) {
+    try {
+      const j = await apiJson<ApprovalsResponse>("/v1/approvals", { token });
+      setItems(j.items || []);
+    } catch {
       setItems([]);
-      return;
     }
-    const j = await r.json();
-    setItems(j.items || []);
   };
   useEffect(() => {
     void load();
@@ -363,39 +380,43 @@ function Approvals({ token }: { token: string }) {
       <button type="button" onClick={() => void load()}>
         刷新
       </button>
-      <ul>
-        {items.map((it) => (
-          <li key={it.id}>
-            {it.action_type}{" "}
-            <button
-              type="button"
-              onClick={async () => {
-                await apiFetch(`/v1/approvals/${it.id}/decide`, {
-                  method: "POST",
-                  token,
-                  body: JSON.stringify({ decision: "approve" }),
-                });
-                void load();
-              }}
-            >
-              批准
-            </button>
-            <button
-              type="button"
-              onClick={async () => {
-                await apiFetch(`/v1/approvals/${it.id}/decide`, {
-                  method: "POST",
-                  token,
-                  body: JSON.stringify({ decision: "reject" }),
-                });
-                void load();
-              }}
-            >
-              驳回
-            </button>
-          </li>
-        ))}
-      </ul>
+      {items.length === 0 ? (
+        <p style={{ color: "#999", fontSize: 13 }}>暂无待审批项</p>
+      ) : (
+        <ul>
+          {items.map((it) => (
+            <li key={it.id}>
+              {it.action_type}{" "}
+              <button
+                type="button"
+                onClick={async () => {
+                  await apiFetch(`/v1/approvals/${it.id}/decide`, {
+                    method: "POST",
+                    token,
+                    body: JSON.stringify({ decision: "approve" }),
+                  });
+                  void load();
+                }}
+              >
+                批准
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  await apiFetch(`/v1/approvals/${it.id}/decide`, {
+                    method: "POST",
+                    token,
+                    body: JSON.stringify({ decision: "reject" }),
+                  });
+                  void load();
+                }}
+              >
+                驳回
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

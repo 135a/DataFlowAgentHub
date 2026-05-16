@@ -1,19 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { apiFetch } from "../api";
+import { apiJson } from "../api";
+import type { DataSource, DataSourcesResponse } from "../types/api";
 
 export function DataSourcesPage() {
   const token = useMemo(() => localStorage.getItem("token"), []);
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<DataSource[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: "", kind: "postgres", host: "", port: 5432, database: "", username: "", password: "", sslmode: "disable" });
   const [status, setStatus] = useState("");
 
   const load = async () => {
-    const r = await apiFetch("/v1/data-sources", { token });
-    if (r.ok) {
-      const j = await r.json();
+    try {
+      const j = await apiJson<DataSourcesResponse>("/v1/data-sources", { token });
       setItems(j.items || []);
+    } catch {
+      // load failure — keep existing items
     }
   };
 
@@ -21,18 +23,17 @@ export function DataSourcesPage() {
 
   const submit = async () => {
     setStatus("creating...");
-    const r = await apiFetch("/v1/data-sources", {
-      method: "POST",
-      token,
-      body: JSON.stringify(form),
-    });
-    if (r.ok) {
-      setStatus("created");
+    try {
+      await apiJson("/v1/data-sources", {
+        method: "POST",
+        token,
+        body: JSON.stringify(form),
+      });
+      setStatus("创建成功");
       setShowForm(false);
       void load();
-    } else {
-      const j = await r.json().catch(() => ({ error: "unknown" }));
-      setStatus(`error: ${(j as any).error || r.status}`);
+    } catch {
+      setStatus("创建失败，请检查参数");
     }
   };
 

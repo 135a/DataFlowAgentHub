@@ -1,41 +1,43 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { apiFetch } from "../api";
+import { apiJson } from "../api";
+import { useWorkspaceId } from "../hooks/useWorkspaceId";
+import type { KnowledgeDoc, KnowledgeDocsResponse, UploadKnowledgeResponse } from "../types/api";
 
 export function KnowledgePage() {
   const token = useMemo(() => localStorage.getItem("token"), []);
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<KnowledgeDoc[]>([]);
   const [status, setStatus] = useState("");
-  const workspaceId = "00000000-0000-0000-0000-000000000001"; // demo workspace
+  const workspaceId = useWorkspaceId();
 
   const load = async () => {
-    const r = await apiFetch(`/v1/workspaces/${workspaceId}/knowledge/docs`, { token });
-    if (r.ok) {
-      const j = await r.json();
+    try {
+      const j = await apiJson<KnowledgeDocsResponse>(`/v1/workspaces/${workspaceId}/knowledge/docs`, { token });
       setItems(j.docs || []);
+    } catch {
+      // keep existing items
     }
   };
 
   useEffect(() => { void load(); }, [token]);
 
-  const upload = async (e: React.FormEvent<HTMLFormElement>) => {
+  const upload = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
-    setStatus("uploading...");
-    const r = await apiFetch(`/v1/workspaces/${workspaceId}/knowledge/docs`, {
-      method: "POST",
-      token,
-      body: JSON.stringify({
-        title: String(fd.get("title") || ""),
-        content: String(fd.get("content") || ""),
-      }),
-    });
-    if (r.ok) {
-      setStatus("uploaded");
+    setStatus("上传中...");
+    try {
+      const j = await apiJson<UploadKnowledgeResponse>(`/v1/workspaces/${workspaceId}/knowledge/docs`, {
+        method: "POST",
+        token,
+        body: JSON.stringify({
+          title: String(fd.get("title") || ""),
+          content: String(fd.get("content") || ""),
+        }),
+      });
+      setStatus(`已提交，任务 ID: ${j.task_id}`);
       void load();
-    } else {
-      const j = await r.json().catch(() => ({ error: "unknown" }));
-      setStatus(`error: ${(j as any).error || r.status}`);
+    } catch {
+      setStatus("上传失败，请重试");
     }
     e.currentTarget.reset();
   };
@@ -72,7 +74,7 @@ export function KnowledgePage() {
           {items.map((it) => (
             <tr key={it.id} style={{ borderBottom: "1px solid #eee" }}>
               <td>{it.title}</td>
-              <td>{it.file_type || "text"}</td>
+              <td>{it.doc_type}</td>
               <td>{it.status}</td>
               <td>{it.chunk_count ?? "-"}</td>
               <td>{it.created_at ? new Date(it.created_at).toLocaleString() : "-"}</td>

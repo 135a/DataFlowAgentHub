@@ -455,3 +455,223 @@ service HubInternalService {
 | `services/ai/orchestrator/graph.py` | Python → 入站 | LangGraph 编排图，回调 Go `/internal/nl2sql` |
 | `services/ai/orchestrator/tracing.py` | Python → 入站 | 步骤追踪，回调 Go `/internal/runs` |
 | `services/ai/orchestrator/knowledge_consumer.py` | Python → 入站 | 知识索引消费者，回调 Go `/internal/knowledge-docs` |
+
+---
+
+## 八、架构优劣评估
+
+> 基于实际代码的诚实评估，不粉饰，不回避问题。
+
+### 8.1 优点
+
+#### A1. 安全边界是真正强制的，不是靠约定
+
+```
+❌ 常见做法：文档写"Python 不要直连数据库"，靠 Code Review 守住
+✅ 本项目：Python 物理上根本没有数据库连接，所有 SQL 必经 sqlrun 守门员
+```
+
+`sqlrun.IsReadOnlySQL()` 用最粗暴但最可靠的关键字匹配挡住写操作——绕过它需要在 Go 代码里写一个新的 SQL 执行路径。这不是"信任 Python 不乱来"，而是"Python 想乱来也做不到"。
+
+同样的，数据源密码在数据库里是 AES-256-GCM 密文，泄露数据库也拿不到明文。
+
+#### A2. Go/Python 职责分离干脆利落
+
+```
+Go 侧：
+  ✓ HTTP 路由、认证、限流、SSE           ← 网络基建
+  ✓ 数据库连接池、迁移、Schema 发现       ← 数据基建
+  ✓ SQL 执行、行限制、超时控制            ← 安全边界
+
+Python 侧：
+  ✓ LLM 调用、SQL 生成                   ← AI 能力
+  ✓ LangGraph 多 Agent 编排              ← AI 编排
+  ✓ RAG 文档分块、向量检索               ← 知识库
+```
+
+没有灰色地带："这段 AI prompt 逻辑写在 Go 还是 Python？"——答案永远是 Python。"这个 SQL 查询谁执行？"——答案永远是 Go。
+
+#### A3. Docker Compose 一键启动，依赖自包含
+
+```bash
+docker compose -f deploy/compose/docker-compose.yml up -d
+# → Postgres + Redis + NATS + ChromaDB + Go API + Python AI Worker 全栈启动
+```
+
+对演示、面试、快速验证极其友好。不需要外部 SaaS 依赖（除了可选 OpenAI API）。
+
+#### A4. 路由决策显式化
+
+```go
+// 不靠文档约定"哪个端点需要 operator 角色"——代码即文档
+r.With(middleware.RequireMinRole("operator")).Post("/data-sources", ...)
+r.With(middleware.RequireMinRole("operator")).Post("/approvals/{id}/decide", ...)
+```
+
+中间件链的可读性很高——扫一眼 `Routes()` 就知道每个端点的认证和鉴权要求。
+
+#### A5. 异步任务有降级设计
+
+```go
+// async/task.go
+func (c *Client) EnqueueTask(...) {
+    // 1. 写入 DB（主路径）
+    c.DB.Exec(...)
+    // 2. 发布 NATS（增强路径，失败不阻塞）
+    if c.NATS != nil { c.NATS.Publish(...) }
+    return taskID, nil  // NATS 挂了，任务仍可通过 DB 轮询被消费
+}
+```
+
+关键中间件降级策略：
+- **NATS 不可用**：任务仍在 DB，可被轮询消费
+- **Redis 不可用**：限流器 fail-open 放行
+
+#### A6. 技术栈选择务实
+
+| 组件 | 选择 | 判断 |
+|------|------|------|
+| Go 路由 | chi（非 Gin） | chi 更轻，标准库兼容 |
+| 数据库驱动 | pgx（非 database/sql） | 原生 PostgreSQL 支持，连接池性能好 |
+| 消息队列 | NATS（非 Kafka） | 轻量级，Docker 单进程，MVP 够用 |
+| 向量库 | ChromaDB（非 Pinecone） | 自托管，无外部依赖 |
+| AI 编排 | LangGraph（非自研） | 减少造轮子，状态图模型适合 Agent 流程 |
+
+---
+
+### 8.2 缺点
+
+#### B1. 异步路径的多跳往返
+
+```
+同步路径：Browser → Go → gRPC → Python → SQL → Go → Browser
+          （清晰，2 跳）
+
+异步路径：Browser → Go → NATS → consumer.py → LangGraph
+            → nl2sql_node → HTTP /internal/nl2sql → Go
+            → gRPC → Python → SQL → Go → 返回 → nl2sql_node
+            → analysis_node → report_node
+            → HTTP /internal/tasks/callback → Go → Browser
+          （混乱，7+ 跳，多种协议切换）
+```
+
+`nl2sql_node` 从 Python 回调 Go 的 `/internal/nl2sql`，Go 又通过 gRPC 调用 Python 的 `GenerateSQL`——**绕了一圈回到同一个 Python 进程**。SQL 生成的 LLM 调用本该直接在 Python 本地完成。
+
+#### B2. InternalNL2SQL 与 PostMessage 逻辑重复
+
+```go
+// InternalNL2SQL: ~60 行，其中 80% 跟 PostMessage 同步路径完全一样
+func (a *App) InternalNL2SQL(w http.ResponseWriter, r *http.Request) {
+    // 解析请求 → gRPC GenerateSQL → sqlrun 执行 → 返回结果
+    // 跟 PostMessage 387-413 行逻辑重复
+}
+```
+
+当两个 80% 相同的函数同时存在，维护者必须记得同时修改两边。
+
+#### B3. 两条 Agent Pipeline 路径并存
+
+```
+路径 A（gRPC）:  Go → RunAgentPipeline RPC → Python 跑 LangGraph → 返回结果
+路径 B（NATS）:  Go → NATS → consumer.py → Python 跑 LangGraph → HTTP 回调
+
+相同点：都跑同一个 workflow_graph
+不同点：入口协议不同，结果返回方式不同，错误处理不同
+```
+
+路径 B 经历了完整调试，而路径 A 在 `nl2sql.go` 只有一个客户端封装方法，没有消费端实现。"加一个新 Agent 节点，是改 gRPC 路径还是 NATS 路径？"
+
+#### B4. Python 进程职责耦合
+
+```python
+# __main__.py — 一个进程做了三件事
+def main():
+    # 1. gRPC Server（GenerateSQL + RunAgentPipeline）
+    server = grpc.server(...)
+
+    # 2. NATS Agent Consumer（消费 hub.tasks.agent_pipeline）
+    consumer_thread = threading.Thread(target=start_consumer)
+
+    # 3. NATS Knowledge Consumer？——根本就没启动！
+    # knowledge_consumer.py 的 run_knowledge_consumer() 没有被调用
+```
+
+gRPC Server 和 NATS Consumer 共享同一个进程，一个崩溃可能影响另一个。而且 `knowledge_consumer.py` 根本就没被 `__main__.py` 启动——知识索引的全链路实际上是断的。
+
+#### B5. Python 侧缺乏抽象层
+
+```python
+# consumer.py — HMAC 签名逻辑
+def sign_body(secret, body): ...
+
+# knowledge_consumer.py — 完全相同
+# tracing.py — 完全相同
+# graph.py — 连函数都没提取，内联在 nl2sql_node 里
+```
+
+4 个文件实现同一套 HMAC 签名，修改密钥逻辑需要改 4 处。Python 代码组织处于"原型期"——功能能跑，但没有公共模块。
+
+#### B6. 测试覆盖极度不均
+
+```
+Go 侧:
+  auth/jwt_test.go        ✓ 完整
+  sqlrun/run_test.go      ✓ 完整
+  config/config_test.go   ✓ 完整
+  schema/*_test.go        △ 基础（集成测试因缺 Postgres 而 skip）
+  handlers/*_test.go      ✗ 整个 handlers 包零测试
+  middleware/*_test.go    ✗ 零测试
+  async/*_test.go         ✗ 零测试
+
+Python 侧:
+  tests/                  △ 基础（mock 测试）
+  agents/、orchestrator/   ✗ 关键路径没有集成测试
+```
+
+最需要测试的 `PostMessage`——整个系统的核心路径，220 行代码，包含认证、限流、Schema 发现、SQL 执行、SSE 推送、路由分支——完全没有测试。
+
+#### B7. 基础设施的维护负担
+
+对于 MVP，依赖了 6 个中间件：
+
+```
+Postgres + Redis + NATS + ChromaDB + gRPC + Docker Compose
+```
+
+每个都需要版本管理、数据持久化、健康检查、日志采集、备份策略。`GET /health` 只查了 Postgres 和 Redis，NATS 和 ChromaDB 的健康状态完全不可见。对演示来说正好（一键启动），对长期维护来说偏重。
+
+#### B8. 配置管理是环境变量的堆砌
+
+```go
+// config.go — 26 个环境变量
+func Load() (*Config, error) {
+    // HUB_JWT_SECRET, HUB_INTERNAL_HMAC_SECRET, HUB_DB_ENCRYPTION_KEY
+    // HUB_DATABASE_URL, HUB_REDIS_ADDR, HUB_NATS_URL
+    // HUB_LLM_BASE_URL, HUB_LLM_MODEL, HUB_LLM_API_KEY
+    // HUB_SEED_EMAIL, HUB_SEED_PASSWORD
+    // ... 还有 14 个
+}
+```
+
+新增一个配置项需要碰 3 处：config.go 的 struct + Load() + .env.example。没有配置文件分层（开发/测试/生产），没有 secret 和 config 的区分。
+
+---
+
+### 8.3 评分矩阵
+
+| 维度 | 评分 | 说明 |
+|------|:---:|------|
+| **安全设计** | ★★★★★ | 强制边界，零信任，密码加密，SQL 守门 |
+| **职责分离** | ★★★★★ | Go/Python 边界清晰，没有灰色地带 |
+| **演示体验** | ★★★★☆ | Docker 一键启动，但依赖 6 个中间件 |
+| **代码组织（Go）** | ★★★★☆ | package 划分合理，中间件链清晰 |
+| **代码组织（Python）** | ★★☆☆☆ | 缺少公共模块，重复代码多 |
+| **核心路径清晰度** | ★★★☆☆ | 同步路径干净，异步路径绕圈 |
+| **测试覆盖** | ★★☆☆☆ | Go 侧不均匀，handlers 零测试 |
+| **可扩展性** | ★★☆☆☆ | 单进程耦合，但架构预留了扩展点 |
+| **可维护性** | ★★★☆☆ | Go 侧好，Python 侧差，配置管理粗糙 |
+| **运维复杂度** | ★★☆☆☆ | 6 个中间件，健康检查不全 |
+
+### 8.4 一句话总结
+
+**安全边界是亮点，异步路径是痛点。Go 侧整体比 Python 侧成熟一个层次。演示满分，生产还差两三个迭代。**
