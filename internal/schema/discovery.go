@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dataflowagenthub/hub/internal/config"
+	"github.com/dataflowagenthub/hub/internal/sqlrun"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
@@ -57,6 +58,10 @@ func DiscoverSchema(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config,
 		var t, c, dt, nullable string
 		if err := rows.Scan(&t, &c, &dt, &nullable); err != nil {
 			return nil, fmt.Errorf("scan schema row: %w", err)
+		}
+		// 跳过系统表，不暴露给用户
+		if sqlrun.IsSystemTable(t) {
+			continue
 		}
 		cols, exists := tableMap[t]
 		if !exists {

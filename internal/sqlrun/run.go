@@ -65,6 +65,19 @@ func QueryRows(ctx context.Context, pool *pgxpool.Pool, sql string, maxRows int3
 	return out, nil
 }
 
+// ExecuteWrite 执行写操作（INSERT/UPDATE/DELETE/CREATE 等），带超时控制
+// 调用方需先通过 ClassifySQL + IsAllowedForRole + IsSystemTable 进行权限检查
+func ExecuteWrite(ctx context.Context, pool *pgxpool.Pool, sql string, timeout time.Duration) (int64, error) {
+	sql = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(sql), ";"))
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	tag, err := pool.Exec(ctx, sql)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // Ping 检查数据库连接是否正常
 func Ping(ctx context.Context, pool *pgxpool.Pool) error {
 	return pool.Ping(ctx)

@@ -135,3 +135,77 @@ func (a *App) TestDataSource(w http.ResponseWriter, r *http.Request) {
 	}
 	JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
+
+// UpdateDataSource admin 编辑数据源连接参数（仅 admin）
+func (a *App) UpdateDataSource(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		errJSON(w, http.StatusBadRequest, "missing data source id")
+		return
+	}
+
+	c := middleware.ClaimsFromContext(r.Context())
+	var body createDSBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	body.Kind = strings.ToLower(strings.TrimSpace(body.Kind))
+	if body.Kind != "postgres" {
+		errJSON(w, http.StatusBadRequest, "kind must be postgres")
+		return
+	}
+	if body.Name == "" || body.Host == "" || body.Port == 0 || body.Database == "" || body.Username == "" {
+		errJSON(w, http.StatusBadRequest, "missing required fields")
+		return
+	}
+	if body.SSLMode == "" {
+		body.SSLMode = "disable"
+	}
+
+	encryptedPassword, err := hubcrypto.Encrypt(body.Password, a.Cfg.DBEncryptionKey)
+	if err != nil {
+		a.Log.Error("encrypt password", zap.Error(err))
+		errJSON(w, http.StatusInternalServerError, "failed to encrypt password")
+		return
+	}
+
+	tag, err := a.DB.Exec(r.Context(), `
+		UPDATE data_sources SET name=$1, kind=$2, host=$3, port=$4, database=$5, username=$6, password=$7, sslmode=$8
+		WHERE id=$9::uuid AND workspace_id=$10::uuid`,
+		body.Name, body.Kind, body.Host, body.Port, body.Database, body.Username, encryptedPassword, body.SSLMode,
+		id, c.WorkspaceID)
+	if err != nil {
+		a.Log.Error("update data source", zap.Error(err))
+		errJSON(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		errJSON(w, http.StatusNotFound, "数据源不存在")
+		return
+	}
+	JSON(w, http.StatusOK, map[string]any{"message": "ok"})
+}
+
+// DeleteDataSource admin 删除数据源（仅 admin）
+func (a *App) DeleteDataSource(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		errJSON(w, http.StatusBadRequest, "missing data source id")
+		return
+	}
+
+	c := middleware.ClaimsFromContext(r.Context())
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM data_sources WHERE id=$1::uuid AND workspace_id=$2::uuid`,
+		id, c.WorkspaceID)
+	if err != nil {
+		a.Log.Error("delete data source", zap.Error(err))
+		errJSON(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		errJSON(w, http.StatusNotFound, "数据源不存在")
+		return
+	}
+	JSON(w, http.StatusOK, map[string]any{"message": "ok"})
+}

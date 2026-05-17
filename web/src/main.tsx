@@ -8,6 +8,8 @@ import { PageSkeleton } from "./components/Skeleton";
 
 const DataSourcesPage = lazy(() => import("./pages/DataSourcesPage").then(m => ({ default: m.DataSourcesPage })));
 const KnowledgePage = lazy(() => import("./pages/KnowledgePage").then(m => ({ default: m.KnowledgePage })));
+const TablesPage = lazy(() => import("./pages/TablesPage").then(m => ({ default: m.TablesPage })));
+const AdminUsersPage = lazy(() => import("./pages/AdminUsersPage").then(m => ({ default: m.AdminUsersPage })));
 
 function Root() {
   const token = localStorage.getItem("token");
@@ -24,6 +26,14 @@ function Root() {
             <Route
               path="/knowledge"
               element={token ? <KnowledgePage /> : <Navigate to="/login" replace />}
+            />
+            <Route
+              path="/tables"
+              element={token ? <TablesPage /> : <Navigate to="/login" replace />}
+            />
+            <Route
+              path="/admin/users"
+              element={token ? <AdminUsersPage /> : <Navigate to="/login" replace />}
             />
             <Route
               path="/*"

@@ -14,6 +14,7 @@ import (
 	"github.com/dataflowagenthub/hub/internal/async"
 	"github.com/dataflowagenthub/hub/internal/config"
 	"github.com/dataflowagenthub/hub/internal/handlers"
+	"github.com/dataflowagenthub/hub/internal/llm"
 	"github.com/dataflowagenthub/hub/internal/migrate"
 	"github.com/dataflowagenthub/hub/internal/nl2sqlexec"
 	"github.com/dataflowagenthub/hub/internal/otelsetup"
@@ -91,6 +92,12 @@ func main() {
 	// 创建 NL2SQL 执行器
 	nl2sqlExec := nl2sqlexec.NewExecutor(nl, cfg.QueryMaxRows, cfg.QueryTimeout)
 
+	// 创建 LLM 客户端，用于 AI 校验
+	llmClient := &llm.Client{
+		BaseURL: cfg.LLMBaseURL,
+		APIKey:  cfg.LLMAPIKey,
+	}
+
 	// 初始化应用程序结构体
 	app := &handlers.App{
 		Cfg:        cfg,
@@ -102,6 +109,7 @@ func main() {
 		NATS:       nc,
 		AsyncTask:  async.NewClient(pool, nc, zl),
 		NL2SQLExec: nl2sqlExec,
+		LlmClient:  llmClient,
 	}
 
 	// 初始化 OpenTelemetry

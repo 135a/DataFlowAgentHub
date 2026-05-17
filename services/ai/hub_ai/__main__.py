@@ -18,24 +18,11 @@ def _setup_logging():
 
 
 def _read_only_ok(sql: str) -> tuple[bool, str]:
+    """不再拦截写操作 — 权限交由 Go 侧 sqlrun 执行器统一管理。
+    保留此函数只做基本格式检查，不做关键字拦截。"""
     s = sql.strip().rstrip(";").upper()
     if not s:
         return False, "empty sql"
-    padded = " " + s + " "
-    for bad in (
-        " INSERT ",
-        " UPDATE ",
-        " DELETE ",
-        " DROP ",
-        " CREATE ",
-        " ALTER ",
-        " TRUNCATE ",
-        " MERGE ",
-        " GRANT ",
-        " REVOKE ",
-    ):
-        if bad in padded:
-            return False, f"disallowed keyword near {bad.strip()}"
     return True, ""
 
 
@@ -75,10 +62,10 @@ def main():
                 m = re.search(r"\d+", msg)
                 if m:
                     sql = f"SELECT {m.group()} AS n"
-            ok, reason = _read_only_ok(sql)
-            if not ok:
+            # 模型返回 ERROR: 前缀表示需要用户补充信息，不是真正的 SQL
+            if sql.startswith("ERROR:"):
                 return nl2sql_pb2.GenerateSQLResponse(
-                    ok=False, error_message=reason, sql="", self_check_notes=""
+                    ok=False, error_message=sql[6:].strip(), sql="", self_check_notes=""
                 )
             return nl2sql_pb2.GenerateSQLResponse(
                 ok=True, sql=sql, self_check_notes=notes, error_message=""
@@ -132,7 +119,18 @@ def main():
                 "You are a Postgres SQL generator. Reply ONLY with SQL, no markdown.\n"
                 f"Tables:\n{schema_text}\n"
                 f"Question: {request.user_message}\n"
-                "Rules: single SELECT only; no DDL/DML; use public schema if unspecified."
+                "Rules:\n"
+                "- SELECT for queries;\n"
+                "- INSERT/UPDATE/DELETE for data changes;\n"
+                "- CREATE TABLE for new tables;\n"
+                "- CRITICAL: NEVER fabricate data. If user asks to insert/update but "
+                "does NOT provide specific values, reply with 'ERROR: ' followed by a "
+                "Chinese question asking what data they want to provide. "
+                "Example: user says '添加一条客户记录' → "
+                "ERROR: 请提供要添加的客户信息，例如姓名、联系方式等\n"
+                "- Only generate INSERT/UPDATE when user provides actual values;\n"
+                "- NEVER touch system tables (users, workspaces, sessions, etc.);\n"
+                "- Use public schema if unspecified."
             )
             r = client.chat.completions.create(
                 model=model,
