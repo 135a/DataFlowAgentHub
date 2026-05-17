@@ -1,28 +1,29 @@
-import os
-import json
-import httpx
 import logging
-from hub_ai.shared import make_headers
+from hub_ai.internal_client import HubInternalClient
 
 logger = logging.getLogger(__name__)
 
+# 全局 gRPC 客户端（惰性初始化）
+_internal_client: HubInternalClient | None = None
+
+
+def _get_internal_client() -> HubInternalClient:
+    global _internal_client
+    if _internal_client is None:
+        _internal_client = HubInternalClient()
+    return _internal_client
+
 
 def report_run_step(run_id: str, agent_name: str, status: str, input_summary: str = "", output_summary: str = "", error_message: str = ""):
-    api_url = os.environ.get("HUB_API_INTERNAL_URL", "http://api:8080")
-    secret = os.environ.get("HUB_INTERNAL_HMAC_SECRET", "dev-hmac-secret-change-me")
-
-    payload = {
-        "agent_name": agent_name,
-        "status": status,
-        "input_summary": input_summary[:1000],
-        "output_summary": output_summary[:1000],
-        "error_message": error_message[:1000]
-    }
-
-    body_bytes = json.dumps(payload).encode()
-    headers = make_headers(secret, body_bytes)
-
     try:
-        httpx.post(f"{api_url}/internal/runs/{run_id}/steps", headers=headers, content=body_bytes, timeout=2.0)
+        client = _get_internal_client()
+        client.run_step_callback(
+            run_id=run_id,
+            agent_name=agent_name,
+            status=status,
+            input_summary=input_summary,
+            output_summary=output_summary,
+            error_message=error_message,
+        )
     except Exception as e:
-        logger.warning(f"Failed to report run step to Go API: {e}")
+        logger.warning(f"Failed to report run step via gRPC: {e}")

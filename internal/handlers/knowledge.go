@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/dataflowagenthub/hub/internal/middleware"
@@ -103,38 +102,4 @@ func (a *App) UploadKnowledgeDoc(w http.ResponseWriter, r *http.Request) {
 	}
 
 	JSON(w, http.StatusAccepted, map[string]any{"id": docID, "task_id": taskID, "status": "pending"})
-}
-
-// KnowledgeDocCallback 是供 Python 工作节点更新文档索引状态的内部端点。认证由 InternalHMACAuth 中间件处理。
-func (a *App) KnowledgeDocCallback(w http.ResponseWriter, r *http.Request) {
-	docID := chi.URLParam(r, "docID")
-	var body struct {
-		Status       string `json:"status"` // 'completed' or 'failed'
-		ChromaDocID  string `json:"chroma_doc_id"`
-		ChunkCount   int    `json:"chunk_count"`
-		ErrorMessage string `json:"error_message"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		errJSON(w, http.StatusBadRequest, "invalid JSON")
-		return
-	}
-
-	status := strings.ToLower(body.Status)
-	if status != "completed" && status != "failed" {
-		errJSON(w, http.StatusBadRequest, "invalid status")
-		return
-	}
-
-	_, err := a.DB.Exec(r.Context(), `
-		UPDATE knowledge_docs
-		SET status = $2, chroma_doc_id = $3, chunk_count = $4, updated_at = now()
-		WHERE id = $1::uuid`,
-		docID, status, body.ChromaDocID, body.ChunkCount)
-	if err != nil {
-		a.Log.Error("update knowledge doc", zap.Error(err))
-		errJSON(w, http.StatusInternalServerError, "db error")
-		return
-	}
-
-	JSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }

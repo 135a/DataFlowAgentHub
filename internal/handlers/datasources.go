@@ -10,6 +10,7 @@ import (
 	"github.com/dataflowagenthub/hub/internal/connector"
 	hubcrypto "github.com/dataflowagenthub/hub/internal/crypto"
 	"github.com/dataflowagenthub/hub/internal/middleware"
+	"github.com/dataflowagenthub/hub/internal/ratelimit"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -62,6 +63,13 @@ func (a *App) ListDataSources(w http.ResponseWriter, r *http.Request) {
 // CreateDataSource 在服务端存储凭据（GET 请求不会返回密码）
 func (a *App) CreateDataSource(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
+	// 限流：每用户每分钟 30 次
+	if c != nil {
+		if ok, _ := ratelimit.Allow(r.Context(), a.Redis, "ds:"+c.UserID, 30, time.Minute, a.Cfg.RateLimitFailClosed); !ok {
+			errJSON(w, http.StatusTooManyRequests, "rate limit")
+			return
+		}
+	}
 	var body createDSBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		errJSON(w, http.StatusBadRequest, "invalid json")

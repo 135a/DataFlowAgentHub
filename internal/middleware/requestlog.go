@@ -20,10 +20,6 @@ func RequestLog(log *zap.Logger) func(http.Handler) http.Handler {
 			if auth != "" {
 				auth = llm.RedactAuthHeader(auth)
 			}
-			apiKey := r.Header.Get("X-Hub-Api-Key")
-			if apiKey != "" {
-				apiKey = llm.RedactAPIKey(apiKey)
-			}
 			log.Info("http_request",
 				zap.String("method", r.Method),
 				zap.String("path", r.URL.Path),
@@ -31,7 +27,6 @@ func RequestLog(log *zap.Logger) func(http.Handler) http.Handler {
 				zap.String("trace_id", TraceFromContext(r.Context())),
 				zap.Duration("duration", time.Since(start)),
 				zap.String("authorization", auth),
-				zap.String("x_hub_api_key", apiKey),
 			)
 		})
 	}

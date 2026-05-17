@@ -1,4 +1,3 @@
-import httpx
 import json
 import logging
 import os
@@ -10,7 +9,7 @@ from opentelemetry import trace
 
 from orchestrator.state import AgentState
 from orchestrator.tracing import report_run_step
-from hub_ai.shared import make_headers
+from hub_ai.internal_client import HubInternalClient
 from agents.data_analysis_agent import data_analysis_node
 from agents.report_generation_agent import report_generation_node
 from agents.chart_agent import chart_agent_node
@@ -18,50 +17,57 @@ from agents.chart_agent import chart_agent_node
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
+# 全局 gRPC 客户端（惰性初始化）
+_internal_client: HubInternalClient | None = None
+
+
+def _get_internal_client() -> HubInternalClient:
+    global _internal_client
+    if _internal_client is None:
+        _internal_client = HubInternalClient()
+    return _internal_client
+
 
 def nl2sql_node(state: AgentState) -> dict:
-    """通过调用 Go API 的 /internal/nl2sql 端点执行 NL2SQL。"""
+    """通过 gRPC 调用 Go API 的 InternalNL2SQL 执行 NL2SQL。"""
     with tracer.start_as_current_span("nl2sql_node"):
         run_id = state.get("run_id", "")
-        report_run_step(run_id, "nl2sql_agent", "running", "Calling NL2SQL via Go API")
+        report_run_step(run_id, "nl2sql_agent", "running", "Calling NL2SQL via Go API gRPC")
 
         user_input = state.get("user_input", "")
         schema_context = state.get("schema_context", "{}")
 
-        api_url = os.environ.get("HUB_API_INTERNAL_URL", "http://api:8080")
-        secret = os.environ.get("HUB_INTERNAL_HMAC_SECRET", "dev-hmac-secret-change-me")
-
         try:
-            body = {
-                "user_message": user_input,
-                "schema_json": schema_context,
-                "dialect": "postgres",
-            }
-            body_bytes = json.dumps(body).encode()
-            headers = make_headers(secret, body_bytes)
+            client = _get_internal_client()
+            result = client.internal_nl2sql(
+                user_message=user_input,
+                schema_json=schema_context,
+                dialect="postgres",
+            )
 
-            with httpx.Client(timeout=30.0) as client:
-                resp = client.post(
-                    f"{api_url}/internal/nl2sql",
-                    headers=headers,
-                    content=body_bytes,
-                )
-                resp.raise_for_status()
-                result = resp.json()
-                rows = result.get("rows", [])
-                sql = result.get("sql", "")
-                logger.info(f"NL2SQL returned {len(rows)} rows, SQL: {sql[:200]}")
+            if not result.get("ok", True):
+                error_msg = result.get("error_message", "unknown error")
+                logger.error(f"NL2SQL via gRPC failed: {error_msg}")
                 report_run_step(
-                    run_id, "nl2sql_agent", "succeeded",
-                    output_summary=f"Generated SQL, returned {len(rows)} rows"
+                    run_id, "nl2sql_agent", "failed",
+                    error_message=error_msg,
                 )
-                return {"nl2sql_result": rows, "nl2sql_sql": sql}
+                return {"nl2sql_error": error_msg}
+
+            rows = result.get("rows", [])
+            sql = result.get("sql", "")
+            logger.info(f"NL2SQL returned {len(rows)} rows, SQL: {sql[:200]}")
+            report_run_step(
+                run_id, "nl2sql_agent", "succeeded",
+                output_summary=f"Generated SQL, returned {len(rows)} rows",
+            )
+            return {"nl2sql_result": rows, "nl2sql_sql": sql}
 
         except Exception as e:
             logger.error(f"NL2SQL node failed: {e}")
             report_run_step(
                 run_id, "nl2sql_agent", "failed",
-                error_message=str(e)
+                error_message=str(e),
             )
             return {"nl2sql_error": str(e)}
 
@@ -79,7 +85,7 @@ def route_next(state: AgentState) -> Literal["analysis_node", "chart_node", "rep
         return "analysis_node"
 
     # 自动：基于关键词的路由（支持中文和英文）
-    chart_kw = ("chart", "图表", "可视化", "chart", "plot", "graph")
+    chart_kw = ("chart", "图表", "可视化", "plot", "graph")
     analyze_kw = ("分析", "analyze", "trend", "趋势", "对比", "compare")
     report_kw = ("报告", "report", "export", "导出", "简报")
 

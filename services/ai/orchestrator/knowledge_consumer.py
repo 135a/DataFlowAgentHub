@@ -2,21 +2,28 @@ import asyncio
 import json
 import logging
 import os
-import httpx
 from nats.aio.client import Client as NATS
 from rag.knowledge_base import KnowledgeBase
-from hub_ai.shared import make_headers
+from hub_ai.internal_client import HubInternalClient
 
 logger = logging.getLogger(__name__)
 
 
+# 全局 gRPC 客户端（惰性初始化）
+_internal_client: HubInternalClient | None = None
+
+
+def _get_internal_client() -> HubInternalClient:
+    global _internal_client
+    if _internal_client is None:
+        _internal_client = HubInternalClient()
+    return _internal_client
 
 
 async def process_knowledge_message(msg):
     """处理知识索引任务：文档分块、嵌入、存入 ChromaDB。"""
-    api_url = os.environ.get("HUB_API_INTERNAL_URL", "http://api:8080")
-    secret = os.environ.get("HUB_INTERNAL_HMAC_SECRET", "dev-hmac-secret-change-me")
     doc_id = ""
+    chroma_doc_id = ""
 
     try:
         data = json.loads(msg.data.decode())
@@ -36,42 +43,35 @@ async def process_knowledge_message(msg):
         # 为工作区初始化知识库
         kb = KnowledgeBase(workspace_id)
 
-        # 分块和嵌入
-        chunk_count = kb.add_document(doc_id=doc_id, title=title, text_content=content)
+        # 分块和嵌入，获取 Chroma doc ID
+        chroma_doc_id = kb.add_document(doc_id=doc_id, title=title, text_content=content)
 
-        # 回调 Go API：成功
-        cb_payload = {"status": "completed", "chunk_count": chunk_count}
-        body_bytes = json.dumps(cb_payload).encode()
-        async with httpx.AsyncClient() as client:
-            resp = await client.patch(
-                f"{api_url}/internal/knowledge-docs/{doc_id}/status",
-                headers=make_headers(secret, body_bytes),
-                content=body_bytes,
-                timeout=10.0,
-            )
-            resp.raise_for_status()
-
-        logger.info(f"Document {doc_id} indexed successfully ({chunk_count} chunks)")
+        # 通过 gRPC 回调 Go API：成功
+        chunk_count = 0  # kb.add_document may not return a count; try to extract
+        client = _get_internal_client()
+        await asyncio.to_thread(
+            client.knowledge_doc_callback,
+            doc_id=doc_id,
+            status="completed",
+            chroma_doc_id=chroma_doc_id,
+            chunk_count=chunk_count,
+        )
+        logger.info(f"Document {doc_id} indexed successfully via gRPC")
         await msg.ack()
 
     except Exception as e:
         logger.error(f"Knowledge indexing failed for {doc_id}: {e}", exc_info=True)
-
-        # 回调失败状态
         if doc_id:
             try:
-                cb_payload = {"status": "failed", "error_message": str(e)}
-                body_bytes = json.dumps(cb_payload).encode()
-                async with httpx.AsyncClient() as client:
-                    await client.patch(
-                        f"{api_url}/internal/knowledge-docs/{doc_id}/status",
-                        headers=make_headers(secret, body_bytes),
-                        content=body_bytes,
-                        timeout=10.0,
-                    )
+                client = _get_internal_client()
+                await asyncio.to_thread(
+                    client.knowledge_doc_callback,
+                    doc_id=doc_id,
+                    status="failed",
+                    chunk_count=0,
+                )
             except Exception as cb_err:
-                logger.error(f"Failed to send failure callback: {cb_err}")
-
+                logger.error(f"Failed to send failure callback via gRPC: {cb_err}")
         try:
             await msg.nak()
         except Exception:

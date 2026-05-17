@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/dataflowagenthub/hub/internal/middleware"
+	"github.com/dataflowagenthub/hub/internal/ratelimit"
 	"github.com/dataflowagenthub/hub/internal/seed"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -24,6 +26,13 @@ type RegisterRequest struct {
 // Register admin 创建新用户（仅 admin 可调用）
 func (a *App) Register(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
+	// 限流：每用户每分钟 10 次
+	if c != nil {
+		if ok, _ := ratelimit.Allow(r.Context(), a.Redis, "register:"+c.UserID, 10, time.Minute, a.Cfg.RateLimitFailClosed); !ok {
+			errJSON(w, http.StatusTooManyRequests, "rate limit")
+			return
+		}
+	}
 	if c == nil || c.Role != "admin" {
 		errJSON(w, http.StatusForbidden, "仅 admin 可创建用户")
 		return
@@ -49,8 +58,10 @@ func (a *App) Register(w http.ResponseWriter, r *http.Request) {
 
 	// 检查手机号是否已存在
 	var exists int
-	_ = a.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM users WHERE workspace_id = $1 AND phone = $2`,
-		seed.DemoWorkspaceID(), body.Phone).Scan(&exists)
+	if err := a.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM users WHERE workspace_id = $1 AND phone = $2`,
+		seed.DemoWorkspaceID(), body.Phone).Scan(&exists); err != nil {
+		a.Log.Warn("check phone exists", zap.Error(err))
+	}
 	if exists > 0 {
 		errJSON(w, http.StatusConflict, "手机号已存在")
 		return

@@ -51,13 +51,12 @@ func setupTestDB(t *testing.T) *pgxpool.Pool {
 func setupTestApp(t *testing.T, pool *pgxpool.Pool, nl2sqlExec *nl2sqlexec.Executor) *App {
 	t.Helper()
 	cfg := &config.Config{
-		JWTSecret:          []byte("test-jwt-secret-for-integration-tests"),
-		SeedEmail:          "admin@demo.local",
-		SeedPassword:       "changeme",
-		InternalHMACSecret: "test-hmac-secret",
-		QueryMaxRows:       500,
-		QueryTimeout:       30 * time.Second,
-		ApprovalTTL:        3600 * time.Second,
+		JWTSecret:    []byte("test-jwt-secret-for-integration-tests"),
+		SeedEmail:    "admin@demo.local",
+		SeedPassword: "changeme",
+		QueryMaxRows: 500,
+		QueryTimeout: 30 * time.Second,
+		ApprovalTTL:  3600 * time.Second,
 	}
 	log := zap.NewNop()
 
@@ -205,7 +204,7 @@ func TestVersionEndpoint(t *testing.T) {
 // testJWT 生成用于集成测试的有效 JWT
 func testJWT(t *testing.T, secret []byte) string {
 	t.Helper()
-	tok, err := auth.Sign(secret, seed.ServiceAPIUserID, seed.DemoWorkspaceID(), "admin", 1*time.Hour)
+	tok, err := auth.Sign(secret, "00000000-0000-4000-8000-000000000099", seed.DemoWorkspaceID(), "admin", 1*time.Hour)
 	if err != nil {
 		t.Fatalf("failed to sign test JWT: %v", err)
 	}
@@ -222,7 +221,7 @@ func createTestSession(t *testing.T, pool *pgxpool.Pool) string {
 		INSERT INTO sessions (id, workspace_id, user_id, title)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, 'test session')
 		ON CONFLICT (id) DO NOTHING`,
-		id, seed.DemoWorkspaceID(), seed.ServiceAPIUserID)
+		id, seed.DemoWorkspaceID(), "00000000-0000-4000-8000-000000000099")
 	if err != nil {
 		t.Fatalf("failed to create test session: %v", err)
 	}

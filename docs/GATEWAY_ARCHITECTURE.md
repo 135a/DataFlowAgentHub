@@ -98,9 +98,8 @@ func Routes(a *App) http.Handler {
 // UnifiedAuth 依次尝试以下认证方式，任一通过即注入 Claims 并放行：
 //
 //   1. X-Hub-Signature 头      → HMAC-SHA256 签名验证（内部回调）
-//   2. X-Hub-Api-Key 头        → API Key 匹配（服务间调用）
-//   3. Authorization: Bearer   → JWT 解析 + 吊销检查（用户会话）
-//   4. ?token= 查询参数         → JWT 解析（SSE EventSource）
+//   2. Authorization: Bearer   → JWT 解析 + 吊销检查（用户会话）
+//   3. ?token= 查询参数         → JWT 解析（SSE EventSource）
 //
 // 全部失败 → 401
 
@@ -230,7 +229,7 @@ Browser → Go POST /v1/sessions/{id}/messages
 **存在意义：** 所有面向用户的功能通过同一套认证/授权/限流体系接入。SaaS 多租户模型的核心——一个用户一个 token，访问自己工作区的所有资源。
 
 **关键设计决策：**
-- **双认证**：交互式用户使用 JWT（HS256），服务间调用使用 `X-Hub-Api-Key`
+- **JWT 认证**：交互式用户使用 JWT（HS256）
 - **SSE 兼容**：中间件同时支持 `Authorization: Bearer` Header 和 `?token=` 查询参数
 - **SSE Token**：短期专用 JWT（1 小时，viewer 角色），降低 URL 中 Token 泄露的风险
 - **JWT 吊销**：基于 Redis 的 JTI 黑名单，支持主动吊销

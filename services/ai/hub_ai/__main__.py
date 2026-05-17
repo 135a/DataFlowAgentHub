@@ -92,6 +92,7 @@ def main():
                 }
                 config = {"configurable": {"thread_id": request.session_id}}
                 result = workflow_graph.invoke(initial_state, config=config)
+                # Note: sync invoke in gRPC handler; Go side has its own deadline
                 
                 return nl2sql_pb2.RunAgentPipelineResponse(
                     ok=True, 
@@ -136,6 +137,7 @@ def main():
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
+                timeout=60.0,
             )
             sql = (r.choices[0].message.content or "").strip()
             for prefix in ("```sql", "```"):
@@ -185,7 +187,29 @@ def main():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=8))
     nl2sql_pb2_grpc.add_NL2SQLServiceServicer_to_server(Servicer(), server)
     addr = os.environ.get("WORKER_GRPC_ADDR", "0.0.0.0:50051")
-    server.add_insecure_port(addr)
+
+    # mTLS 支持：若配置了证书则使用安全端口，否则回退到 insecure
+    ca_cert = os.environ.get("HUB_GRPC_CA_CERT") or ""
+    server_cert = os.environ.get("HUB_GRPC_SERVER_CERT") or ""
+    server_key = os.environ.get("HUB_GRPC_SERVER_KEY") or ""
+    if ca_cert and server_cert and server_key:
+        with open(server_cert, "rb") as f:
+            server_cert_bytes = f.read()
+        with open(server_key, "rb") as f:
+            server_key_bytes = f.read()
+        with open(ca_cert, "rb") as f:
+            ca_bytes = f.read()
+        creds = grpc.ssl_server_credentials(
+            [(server_key_bytes, server_cert_bytes)],
+            root_certificates=ca_bytes,
+            require_client_auth=True,
+        )
+        server.add_secure_port(addr, creds)
+        logging.getLogger(__name__).info("grpc mTLS enabled on %s", addr)
+    else:
+        server.add_insecure_port(addr)
+        logging.getLogger(__name__).info("grpc insecure on %s", addr)
+
     server.start()
     logging.getLogger(__name__).info("grpc listening on %s", addr)
     

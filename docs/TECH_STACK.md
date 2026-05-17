@@ -144,7 +144,7 @@
 | 机制 | 实现细节 |
 |------|---------|
 | 用户认证 | JWT HS256（`POST /v1/auth/login` 签发，Claims 含 UserID、WorkspaceID、Role） |
-| 服务间认证 | `X-Hub-Api-Key` 头（配置共享）+ `X-Hub-Signature`（HMAC-SHA256，防篡改） |
+| 服务间认证 | `X-Hub-Signature`（HMAC-SHA256，内部回调专用） |
 | 密码存储 | bcrypt |
 | 数据源密码 | AES-256-GCM 加密后存 DB |
 | SQL 注入防护 | 双重只读守卫：Go 侧 `sqlrun.IsReadOnlySQL()` + Python 侧 `_read_only_ok()`，均通过关键字黑名单阻断写操作 |

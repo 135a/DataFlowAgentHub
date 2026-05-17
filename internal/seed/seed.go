@@ -43,23 +43,6 @@ func EnsureAdminUser(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config
 // DemoWorkspaceID 返回固定的演示工作区 UUID 字符串
 func DemoWorkspaceID() string { return demoWorkspaceID }
 
-const ServiceAPIUserID = "00000000-0000-4000-8000-000000000099"
-
-// EnsureServiceAPIUser 为 X-Hub-Api-Key 认证插入专用的 admin 行（不可密码登录）
-func EnsureServiceAPIUser(ctx context.Context, pool *pgxpool.Pool) error {
-	hash, err := bcrypt.GenerateFromPassword([]byte("no-login-"+demoWorkspaceID), bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-	_, err = pool.Exec(ctx, `
-		INSERT INTO users (id, workspace_id, email, password_hash, role)
-		VALUES ($1::uuid, $2::uuid, 'api-key@internal', $3, 'admin')
-		ON CONFLICT (workspace_id, email) DO NOTHING`,
-		ServiceAPIUserID, demoWorkspaceID, string(hash),
-	)
-	return err
-}
-
 // GetUserID 在演示工作区中通过邮箱加载用户 ID
 func GetUserID(ctx context.Context, pool *pgxpool.Pool, email string) (string, error) {
 	var id string

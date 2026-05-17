@@ -12,7 +12,8 @@ import (
 
 var writeKeywords = []string{
 	"INSERT ", "UPDATE ", "DELETE ", "DROP ", "CREATE ", "ALTER ", "TRUNCATE ",
-	"MERGE ", "GRANT ", "REVOKE ", "CALL ",
+	"MERGE ", "GRANT ", "REVOKE ", "CALL ", "EXECUTE ",
+	"REPLACE ", "VACUUM ", "REINDEX ", "COPY ",
 }
 
 // IsReadOnlySQL 如果语句包含写 DDL/DML 则返回错误

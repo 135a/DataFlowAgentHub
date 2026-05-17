@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"github.com/dataflowagenthub/hub/internal/middleware"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -14,7 +13,6 @@ var uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-
 
 // DownloadReport 允许下载指定运行的 Excel 报告
 func (a *App) DownloadReport(w http.ResponseWriter, r *http.Request) {
-	_ = middleware.ClaimsFromContext(r.Context())
 	runID := chi.URLParam(r, "runID")
 
 	// 验证 UUID v4 格式以防止路径遍历攻击

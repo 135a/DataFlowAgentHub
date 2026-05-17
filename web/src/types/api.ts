@@ -108,3 +108,29 @@ export interface UploadKnowledgeResponse {
 export interface PostMessageResponse {
   task_id: string;
 }
+
+// ── Data Management ──
+export interface UploadDataResponse {
+  ok?: boolean;
+  rows_affected?: number;
+  error?: string;
+  message?: string;
+  ddl?: string;
+}
+
+export interface SuggestTableResponse {
+  table_name: string;
+  explanation: string;
+  ddl: string;
+}
+
+export interface CreateTableResponse {
+  ok?: boolean;
+  message?: string;
+  error?: string;
+  ddl?: string;
+}
+
+export interface TableListResponse {
+  tables: { name: string }[];
+}

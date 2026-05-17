@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -51,6 +52,7 @@ type App struct {
 func JSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
+	// unrecoverable: headers already sent; connection likely broken if this fails
 	_ = json.NewEncoder(w).Encode(v)
 }
 
@@ -58,8 +60,20 @@ func errJSON(w http.ResponseWriter, status int, msg string) {
 	JSON(w, status, map[string]string{"error": msg})
 }
 
+// sessionBelongsToWorkspace 检查会话是否属于指定工作区
+func (a *App) sessionBelongsToWorkspace(ctx context.Context, sessionID, workspaceID string) bool {
+	var ws string
+	err := a.DB.QueryRow(ctx, `SELECT workspace_id::text FROM sessions WHERE id = $1::uuid`, sessionID).Scan(&ws)
+	return err == nil && ws == workspaceID
+}
+
 // Login 接受种子用户凭证并返回 JWT
 func (a *App) Login(w http.ResponseWriter, r *http.Request) {
+	// 限流：每 IP 每分钟 20 次
+	if ok, _ := ratelimit.Allow(r.Context(), a.Redis, "login:"+r.RemoteAddr, 20, time.Minute, a.Cfg.RateLimitFailClosed); !ok {
+		errJSON(w, http.StatusTooManyRequests, "rate limit")
+		return
+	}
 	var body struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -153,13 +167,11 @@ func (a *App) ListSessions(w http.ResponseWriter, r *http.Request) {
 func (a *App) SSEToken(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
 	sid := chi.URLParam(r, "sessionID")
-	var ws string
-	err := a.DB.QueryRow(r.Context(), `SELECT workspace_id::text FROM sessions WHERE id = $1::uuid`, sid).Scan(&ws)
-	if err != nil || ws != c.WorkspaceID {
+	if !a.sessionBelongsToWorkspace(r.Context(), sid, c.WorkspaceID) {
 		errJSON(w, http.StatusNotFound, "session not found")
 		return
 	}
-	tok, err := auth.SignSSEToken(a.Cfg.JWTSecret, c.UserID, ws, sid)
+	tok, err := auth.SignSSEToken(a.Cfg.JWTSecret, c.UserID, c.WorkspaceID, sid)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "sse token")
 		return
@@ -170,9 +182,7 @@ func (a *App) SSEToken(w http.ResponseWriter, r *http.Request) {
 func (a *App) ListMessages(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
 	sid := chi.URLParam(r, "sessionID")
-	var ws string
-	err := a.DB.QueryRow(r.Context(), `SELECT workspace_id::text FROM sessions WHERE id = $1::uuid`, sid).Scan(&ws)
-	if err != nil || ws != c.WorkspaceID {
+	if !a.sessionBelongsToWorkspace(r.Context(), sid, c.WorkspaceID) {
 		errJSON(w, http.StatusNotFound, "session not found")
 		return
 	}
@@ -194,7 +204,9 @@ func (a *App) ListMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var obj any
-		_ = json.Unmarshal(content, &obj)
+		if err := json.Unmarshal(content, &obj); err != nil {
+			a.Log.Warn("unmarshal message content", zap.Error(err))
+		}
 		items = append(items, map[string]any{
 			"id": id, "role": role, "content": obj, "created_at": created.UTC().Format(time.RFC3339),
 		})
@@ -213,7 +225,10 @@ func (a *App) ListMessages(w http.ResponseWriter, r *http.Request) {
 			var idx int
 			var agent, stat, inSum, outSum, errMsg string
 			var created time.Time
-			_ = stepRows.Scan(&idx, &agent, &stat, &inSum, &outSum, &errMsg, &created)
+			if err := stepRows.Scan(&idx, &agent, &stat, &inSum, &outSum, &errMsg, &created); err != nil {
+				a.Log.Warn("scan agent_run_step", zap.Error(err))
+				continue
+			}
 			step := map[string]any{
 				"step_index": idx, "agent_name": agent, "status": stat,
 				"input_summary": inSum, "output_summary": outSum, "error_message": errMsg,
@@ -232,7 +247,9 @@ func (a *App) CreateSession(w http.ResponseWriter, r *http.Request) {
 		Title        string `json:"title"`
 		DataSourceID string `json:"data_source_id"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.Log.Warn("decode create session body", zap.Error(err))
+	}
 	title := strings.TrimSpace(body.Title)
 	if title == "" {
 		title = "New session"
@@ -273,223 +290,233 @@ func (a *App) CreateSession(w http.ResponseWriter, r *http.Request) {
 
 // PostMessage 处理用户发送的消息请求
 func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
-	// 记录请求开始时间，用于 SSE 进度事件中计算耗时
 	startTime := time.Now()
-	// 从请求上下文中获取用户认证信息
 	c := middleware.ClaimsFromContext(r.Context())
-	// 从URL参数中获取会话ID
 	sid := chi.URLParam(r, "sessionID")
-	// 检查消息发送频率限制/
-	if ok, _ := ratelimit.Allow(r.Context(), a.Redis, "msg:"+c.UserID, 30, time.Minute); !ok {
+
+	if ok, _ := ratelimit.Allow(r.Context(), a.Redis, "msg:"+c.UserID, 30, time.Minute, a.Cfg.RateLimitFailClosed); !ok {
 		errJSON(w, http.StatusTooManyRequests, "rate limit")
 		return
 	}
-	// 定义请求体结构
+
 	var body struct {
-		Text     string `json:"text"`     // 消息内容
-		Workflow string `json:"workflow"` // 工作流类型
+		Text     string `json:"text"`
+		Workflow string `json:"workflow"`
 	}
-	// 解析请求体并验证消息内容
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Text) == "" {
 		errJSON(w, http.StatusBadRequest, "text required")
 		return
 	}
-	// 获取请求上下文和追踪信息
+
 	ctx := r.Context()
 	trace := middleware.TraceFromContext(ctx)
 
-	// 确保会话属于该工作区，同时查找 data_source_id
-	var ws string                                                                                           // 声明一个字符串变量ws，用于存储workspace_id
-	var dsID, dsKind *string                                                                                // 声明两个字符串指针变量dsID和dsKind，用于存储数据源ID和数据源类型
-	err := a.DB.QueryRow(ctx, `SELECT workspace_id::text FROM sessions WHERE id = $1::uuid`, sid).Scan(&ws) // 执行SQL查询，从sessions表中查询指定ID的session的workspace_id，并将其转换为字符串类型
-	if err != nil || ws != c.WorkspaceID {                                                                  // 检查查询是否出错，或者查询到的workspace_id与请求中的workspace_id是否不匹配
-		errJSON(w, http.StatusNotFound, "session not found") // 如果出错或不匹配，返回404错误，提示session未找到
-		return                                               // 终止函数执行
+	var dsID, dsKind *string
+	if !a.sessionBelongsToWorkspace(ctx, sid, c.WorkspaceID) {
+		errJSON(w, http.StatusNotFound, "session not found")
+		return
 	}
-	// 检查会话是否关联了数据源
-	_ = a.DB.QueryRow(ctx, `
+	if err := a.DB.QueryRow(ctx, `
 		SELECT ds.id::text, ds.kind FROM data_sources ds
 		JOIN sessions s ON s.data_source_id = ds.id
-		WHERE s.id = $1::uuid`, sid).Scan(&dsID, &dsKind)
+		WHERE s.id = $1::uuid`, sid).Scan(&dsID, &dsKind); err != nil {
+		a.Log.Debug("session has no data source, using default", zap.String("session_id", sid))
+	}
 	if dsKind == nil {
 		k := "postgres"
 		dsKind = &k
 	}
 
-	userContent, _ := json.Marshal(map[string]string{"text": body.Text})
-	_, _ = a.DB.Exec(ctx, `INSERT INTO messages (session_id, role, content) VALUES ($1::uuid, 'user', $2)`, sid, userContent)
-
-	a.Bus.Publish(sid, ssebus.Event{Type: "user_message", Data: map[string]string{"text": body.Text}})
-
-	// 解析 schema JSON 以供 NL2SQL 上下文使用
-	sourceKey := "hub"
-	var discoverPool *pgxpool.Pool = a.DB
-	if dsID != nil {
-		sourceKey = *dsID
-		// 获取数据源凭证
-		var host, db, user, pwd, ssl string
-		var port int
-		err := a.DB.QueryRow(ctx, `SELECT host, port, database, username, password, sslmode FROM data_sources WHERE id = $1::uuid`, *dsID).Scan(&host, &port, &db, &user, &pwd, &ssl)
-		if err != nil {
-			errJSON(w, http.StatusInternalServerError, "data source not found")
-			return
-		}
-		decryptedPwd, decErr := hubcrypto.Decrypt(pwd, a.Cfg.DBEncryptionKey)
-		if decErr != nil {
-			a.Log.Error("decrypt datasource password", zap.Error(decErr))
-			errJSON(w, http.StatusInternalServerError, "failed to decrypt datasource password")
-			return
-		}
-		extPool, connErr := schema.ConnectToExternalDataSource(ctx, host, port, db, user, decryptedPwd, ssl)
-		if connErr != nil {
-			errJSON(w, http.StatusBadGateway, "schema discovery: cannot connect to data source: "+connErr.Error())
-			return
-		}
-		defer extPool.Close()
-		discoverPool = extPool
-	}
-	schemaResult, schemaErr := schema.CachedSchema(ctx, discoverPool, a.Redis, a.Cfg, a.Log, c.WorkspaceID, sourceKey)
-	if schemaErr != nil {
-		errJSON(w, http.StatusBadGateway, "schema discovery failed: "+schemaErr.Error())
+	// 插入用户消息
+	userContent, err := json.Marshal(map[string]string{"text": body.Text})
+	if err != nil {
+		a.Log.Error("marshal user message", zap.Error(err))
+		errJSON(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	schemaJSON, _ := schemaResult.ToJSON()
+	if _, err := a.DB.Exec(ctx, `INSERT INTO messages (session_id, role, content) VALUES ($1::uuid, 'user', $2)`, sid, userContent); err != nil {
+		a.Log.Error("insert user message", zap.Error(err))
+	}
+	a.Bus.Publish(sid, ssebus.Event{Type: "user_message", Data: map[string]string{"text": body.Text}})
+
+	// 解析 schema
+	schemaJSON, err := a.resolveSchema(ctx, dsID, c.WorkspaceID)
+	if err != nil {
+		errJSON(w, http.StatusBadGateway, err.Error())
+		return
+	}
 	dialect := *dsKind
 
+	// 创建 run
 	rid := uuid.NewString()
-	_, _ = a.DB.Exec(ctx, `INSERT INTO runs (id, session_id, status) VALUES ($1::uuid, $2::uuid, 'running')`, rid, sid)
-
+	if _, err := a.DB.Exec(ctx, `INSERT INTO runs (id, session_id, status) VALUES ($1::uuid, $2::uuid, 'running')`, rid, sid); err != nil {
+		a.Log.Error("insert run", zap.Error(err))
+	}
 	a.Bus.Publish(sid, ssebus.Event{Type: "run_started", Data: map[string]string{
 		"run_id":     rid,
 		"started_at": startTime.UTC().Format(time.RFC3339),
 	}})
 
-	// 9.2 Route to async if complex (keyword detection or explicit workflow parameter)
-	// 将工作流参数转换为小写并去除前后空格
+	// 路由：异步（Agent Pipeline）或同步（NL2SQL）
 	workflow := strings.ToLower(strings.TrimSpace(body.Workflow))
-	// 如果工作流参数为空，则设置为默认值"auto"
 	if workflow == "" {
 		workflow = "auto"
 	}
-
-	// 将文本转换为小写，以便进行不区分大小写的匹配
 	textLow := strings.ToLower(body.Text)
-	// 检查文本是否包含复杂任务的关键词，如"分析"、"报告"、"analyze"、"report"
 	isComplex := strings.Contains(textLow, "分析") || strings.Contains(textLow, "报告") ||
 		strings.Contains(textLow, "analyze") || strings.Contains(textLow, "report")
-	// 判断是否使用代理流水线：当工作流为"agent_pipeline"时，或者工作流为"auto"且任务被判定为复杂任务时
 	useAgentPipeline := (workflow == "agent_pipeline") || (workflow == "auto" && isComplex)
 
-	// 如果使用代理流水线
 	if useAgentPipeline {
-		// 异步执行任务，将任务加入队列
-		// 参数包括：上下文、工作空间ID、会话ID、请求ID、任务类型和任务数据
 		taskID, err := a.AsyncTask.EnqueueTask(ctx, c.WorkspaceID, sid, rid, "agent_pipeline", map[string]any{
-			"user_message": body.Text,  // 用户消息内容
-			"schema_json":  schemaJSON, // JSON格式的schema
+			"user_message": body.Text,
+			"schema_json":  schemaJSON,
 		})
-		// 如果任务入队失败
 		if err != nil {
-			// 标记运行为失败状态，并记录错误信息
 			a.finishRunFailed(ctx, rid, sid, "failed to enqueue task: "+err.Error(), codes.Internal)
-			// 返回错误响应
 			errJSON(w, http.StatusInternalServerError, "enqueue error")
 			return
 		}
-		// 返回成功响应，包含运行ID、任务ID和状态
 		JSON(w, http.StatusAccepted, map[string]any{"run_id": rid, "task_id": taskID, "status": "pending_async"})
 		return
 	}
 
-	// 执行自然语言到SQL的转换操作
-	// 使用NL2SQLExec执行器处理用户输入的自然语言查询
+	// 同步 NL2SQL 执行
 	result, err := a.NL2SQLExec.Execute(ctx, nl2sqlexec.Input{
-		TraceID:     trace,      // 追踪ID，用于请求追踪和日志记录
-		SessionID:   sid,        // 会话ID，用于维护用户会话状态
-		UserMessage: body.Text,  // 用户输入的文本内容，即自然语言查询
-		SchemaJSON:  schemaJSON, // 数据库模式的JSON表示，描述表结构
-		Dialect:     dialect,    // SQL方言，指定要使用的SQL类型(如MySQL, PostgreSQL等)
-		Role:        c.Role,     // 用户角色，用于写操作权限检查
-	}, a.DB) // 数据库连接对象，用于执行生成的SQL查询
-	// 检查错误是否为 nil
+		TraceID:     trace,
+		SessionID:   sid,
+		UserMessage: body.Text,
+		SchemaJSON:  schemaJSON,
+		Dialect:     dialect,
+		Role:        c.Role,
+	}, a.DB)
 	if err != nil {
-		// 尝试从错误中提取 gRPC 状态信息
 		if st, ok := status.FromError(err); ok {
-			// 处理 gRPC 状态错误：记录失败运行，返回 HTTP 502 BadGateway 状态码
 			a.finishRunFailed(ctx, rid, sid, "nl2sql: "+st.Message(), st.Code())
 			errJSON(w, http.StatusBadGateway, mapGRPCCode(st.Code()))
 			return
 		}
-		// 检查是否为 nl2sql 生成错误
 		if genErr, ok := err.(*nl2sqlexec.GenerateError); ok {
-			// 处理 nl2sql 生成错误：记录失败运行，返回 HTTP 400 BadRequest 状态码
 			a.finishRunFailed(ctx, rid, sid, genErr.Message, codes.Internal)
 			errJSON(w, http.StatusBadRequest, genErr.Message)
 			return
 		}
-		// SQL 执行错误 — result 中保留了生成的 SQL 供调试
 		a.finishRunFailed(ctx, rid, sid, err.Error(), codes.InvalidArgument)
 		errJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// 从结果中获取SQL语句和行数据
-	sql := result.SQL
-	_elapsedMs := time.Since(startTime).Milliseconds()
-	// 通过总线发布SQL生成事件，包含会话ID和事件数据
-	// 事件类型为"sql_generated"，数据为包含SQL语句和耗时的map
+	resp, err := a.publishSyncResult(ctx, rid, sid, result, startTime)
+	if err != nil {
+		a.finishRunFailed(ctx, rid, sid, "marshal error", codes.Internal)
+		errJSON(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	JSON(w, http.StatusOK, resp)
+}
+
+// resolveSchema 为会话解析数据库 schema，返回 JSON 字符串
+func (a *App) resolveSchema(ctx context.Context, dsID *string, workspaceID string) (string, error) {
+	sourceKey := "hub"
+	var discoverPool *pgxpool.Pool = a.DB
+	if dsID != nil {
+		sourceKey = *dsID
+		var host, db, user, pwd, ssl string
+		var port int
+		if err := a.DB.QueryRow(ctx,
+			`SELECT host, port, database, username, password, sslmode FROM data_sources WHERE id = $1::uuid`, *dsID,
+		).Scan(&host, &port, &db, &user, &pwd, &ssl); err != nil {
+			return "", fmt.Errorf("data source not found: %w", err)
+		}
+		decryptedPwd, decErr := hubcrypto.Decrypt(pwd, a.Cfg.DBEncryptionKey)
+		if decErr != nil {
+			a.Log.Error("decrypt datasource password", zap.Error(decErr))
+			return "", fmt.Errorf("failed to decrypt datasource password")
+		}
+		extPool, connErr := schema.ConnectToExternalDataSource(ctx, host, port, db, user, decryptedPwd, ssl)
+		if connErr != nil {
+			return "", fmt.Errorf("schema discovery: cannot connect to data source: %w", connErr)
+		}
+		defer extPool.Close()
+		discoverPool = extPool
+	}
+
+	schemaResult, schemaErr := schema.CachedSchema(ctx, discoverPool, a.Redis, a.Cfg, a.Log, workspaceID, sourceKey)
+	if schemaErr != nil {
+		return "", fmt.Errorf("schema discovery failed: %w", schemaErr)
+	}
+	schemaJSON, err := schemaResult.ToJSON()
+	if err != nil {
+		a.Log.Error("marshal schema json", zap.Error(err))
+		return "", fmt.Errorf("schema error")
+	}
+	return schemaJSON, nil
+}
+
+// publishSyncResult 构建同步执行结果，发布 SSE，写入消息和更新 run 状态
+func (a *App) publishSyncResult(ctx context.Context, rid, sid string, result *nl2sqlexec.Result, startTime time.Time) (map[string]any, error) {
+	totalElapsedMs := time.Since(startTime).Milliseconds()
+	startedAt := startTime.UTC().Format(time.RFC3339)
+
 	a.Bus.Publish(sid, ssebus.Event{Type: "sql_generated", Data: map[string]any{
-		"sql":        sql,
-		"elapsed_ms": _elapsedMs,
+		"sql":        result.SQL,
+		"elapsed_ms": time.Since(startTime).Milliseconds(),
 		"is_write":   result.IsWrite,
 	}})
 
-	// 根据读写类型组装响应
-	totalElapsedMs := time.Since(startTime).Milliseconds()
-	startedAt := startTime.UTC().Format(time.RFC3339)
 	var assist []byte
 	var resp map[string]any
 	if result.IsWrite {
-		assist, _ = json.Marshal(map[string]any{
-			"sql":           sql,
+		var marshalErr error
+		assist, marshalErr = json.Marshal(map[string]any{
+			"sql":           result.SQL,
 			"rows_affected": result.RowsAffected,
 			"notes":         result.SelfCheckNotes,
 			"type":          "write",
 			"elapsed_ms":    totalElapsedMs,
 			"started_at":    startedAt,
 		})
+		if marshalErr != nil {
+			a.Log.Error("marshal write result", zap.Error(marshalErr))
+			return nil, marshalErr
+		}
 		resp = map[string]any{
 			"run_id":        rid,
-			"sql":           sql,
+			"sql":           result.SQL,
 			"rows_affected": result.RowsAffected,
 			"elapsed_ms":    totalElapsedMs,
 			"started_at":    startedAt,
 		}
 	} else {
-		rows := result.Rows
-		assist, _ = json.Marshal(map[string]any{
-			"sql":        sql,
-			"rows":       rows,
+		var marshalErr error
+		assist, marshalErr = json.Marshal(map[string]any{
+			"sql":        result.SQL,
+			"rows":       result.Rows,
 			"notes":      result.SelfCheckNotes,
 			"elapsed_ms": totalElapsedMs,
 			"started_at": startedAt,
 		})
+		if marshalErr != nil {
+			a.Log.Error("marshal read result", zap.Error(marshalErr))
+			return nil, marshalErr
+		}
 		resp = map[string]any{
 			"run_id":     rid,
-			"sql":        sql,
-			"rows":       rows,
+			"sql":        result.SQL,
+			"rows":       result.Rows,
 			"elapsed_ms": totalElapsedMs,
 			"started_at": startedAt,
 		}
 	}
-	// 将助手的响应（包含SQL查询结果等信息）插入到messages表中
-	_, _ = a.DB.Exec(ctx, `INSERT INTO messages (session_id, role, content) VALUES ($1::uuid, 'assistant', $2)`, sid, assist)
-	// 更新runs表中的状态为'completed'，并更新updated_at时间戳
-	_, _ = a.DB.Exec(ctx, `UPDATE runs SET status = 'completed', updated_at = now() WHERE id = $1::uuid`, rid)
-	// 通过事件总线发布结果事件，将JSON格式的响应数据作为事件数据发送
+
+	if _, err := a.DB.Exec(ctx, `INSERT INTO messages (session_id, role, content) VALUES ($1::uuid, 'assistant', $2)`, sid, assist); err != nil {
+		a.Log.Error("insert assistant message", zap.Error(err))
+	}
+	if _, err := a.DB.Exec(ctx, `UPDATE runs SET status = 'completed', updated_at = now() WHERE id = $1::uuid`, rid); err != nil {
+		a.Log.Error("update run completed", zap.Error(err))
+	}
 	a.Bus.Publish(sid, ssebus.Event{Type: "result", Data: json.RawMessage(assist)})
-	// 返回HTTP响应，包含运行ID、SQL查询语句和查询结果行数
-	JSON(w, http.StatusOK, resp)
+	return resp, nil
 }
 
 // mapGRPCCode 将gRPC状态码映射为自定义的错误信息字符串
@@ -512,9 +539,16 @@ func mapGRPCCode(c codes.Code) string {
 }
 
 func (a *App) finishRunFailed(ctx context.Context, runID, sessionID, msg string, c codes.Code) {
-	assist, _ := json.Marshal(map[string]any{"error": msg, "code": c.String()})
-	_, _ = a.DB.Exec(ctx, `INSERT INTO messages (session_id, role, content) VALUES ($1::uuid, 'assistant', $2)`, sessionID, assist)
-	_, _ = a.DB.Exec(ctx, `UPDATE runs SET status = 'failed', pending_reason = $2, updated_at = now() WHERE id = $1::uuid`, runID, msg)
+	assist, err := json.Marshal(map[string]any{"error": msg, "code": c.String()})
+	if err != nil {
+		a.Log.Error("marshal failed run", zap.Error(err))
+	}
+	if _, err := a.DB.Exec(ctx, `INSERT INTO messages (session_id, role, content) VALUES ($1::uuid, 'assistant', $2)`, sessionID, assist); err != nil {
+		a.Log.Error("insert failed assistant message", zap.Error(err))
+	}
+	if _, err := a.DB.Exec(ctx, `UPDATE runs SET status = 'failed', pending_reason = $2, updated_at = now() WHERE id = $1::uuid`, runID, msg); err != nil {
+		a.Log.Error("update run failed", zap.Error(err))
+	}
 	a.Bus.Publish(sessionID, ssebus.Event{Type: "error", Data: map[string]string{"message": msg}})
 }
 
@@ -522,9 +556,7 @@ func (a *App) finishRunFailed(ctx context.Context, runID, sessionID, msg string,
 func (a *App) SessionStream(w http.ResponseWriter, r *http.Request) {
 	sid := chi.URLParam(r, "sessionID")
 	c := middleware.ClaimsFromContext(r.Context())
-	var ws string
-	err := a.DB.QueryRow(r.Context(), `SELECT workspace_id::text FROM sessions WHERE id = $1::uuid`, sid).Scan(&ws)
-	if err != nil || ws != c.WorkspaceID {
+	if !a.sessionBelongsToWorkspace(r.Context(), sid, c.WorkspaceID) {
 		errJSON(w, http.StatusNotFound, "session not found")
 		return
 	}
@@ -561,67 +593,21 @@ func (a *App) SessionStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			_, _ = w.Write([]byte("event: " + ev.Type + "\n"))
-			_, _ = w.Write([]byte("data: "))
-			_ = enc.Encode(ev.Data)
-			_, _ = w.Write([]byte("\n"))
+			if _, err := w.Write([]byte("event: " + ev.Type + "\n")); err != nil {
+				return
+			}
+			if _, err := w.Write([]byte("data: ")); err != nil {
+				return
+			}
+			if err := enc.Encode(ev.Data); err != nil {
+				return
+			}
+			if _, err := w.Write([]byte("\n")); err != nil {
+				return
+			}
 			fl.Flush()
 		}
 	}
-}
-
-// InternalNL2SQL 由 Python 编排器的 nl2sql_node 调用，用于通过 Go 的安全边界（gRPC → sqlrun）执行 NL2SQL。
-// 它接收 user_message、schema_json 和 trace_id，调用 Python 工作节点的 GenerateSQL RPC，
-// 执行返回的 SQL（只读），并将结果返回。
-// 认证由 InternalHMACAuth 中间件处理。
-func (a *App) InternalNL2SQL(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		TraceID     string `json:"trace_id"`
-		UserMessage string `json:"user_message"`
-		SchemaJSON  string `json:"schema_json"`
-		Dialect     string `json:"dialect"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		errJSON(w, http.StatusBadRequest, "invalid JSON")
-		return
-	}
-	if body.UserMessage == "" {
-		errJSON(w, http.StatusBadRequest, "user_message is required")
-		return
-	}
-	if body.Dialect == "" {
-		body.Dialect = "postgres"
-	}
-
-	traceID := body.TraceID
-	if traceID == "" {
-		traceID = middleware.TraceFromContext(r.Context())
-	}
-
-	result, err := a.NL2SQLExec.Execute(r.Context(), nl2sqlexec.Input{
-		TraceID:     traceID,
-		SessionID:   "",
-		UserMessage: body.UserMessage,
-		SchemaJSON:  body.SchemaJSON,
-		Dialect:     body.Dialect,
-	}, a.DB)
-	if err != nil {
-		if _, ok := status.FromError(err); ok {
-			a.Log.Error("internal nl2sql: gRPC GenerateSQL failed", zap.Error(err))
-			errJSON(w, http.StatusBadGateway, "nl2sql worker error: "+err.Error())
-		} else if genErr, ok := err.(*nl2sqlexec.GenerateError); ok {
-			errJSON(w, http.StatusBadRequest, genErr.Message)
-		} else {
-			errJSON(w, http.StatusBadRequest, err.Error())
-		}
-		return
-	}
-
-	JSON(w, http.StatusOK, map[string]any{
-		"sql":   result.SQL,
-		"rows":  result.Rows,
-		"notes": result.SelfCheckNotes,
-	})
 }
 
 // Routes 构建 chi 路由器
@@ -691,18 +677,6 @@ func Routes(a *App) http.Handler {
 
 		// Schema 路由
 		r.Get("/schema/tables", a.ListTables) // 获取表结构列表
-	})
-
-	// 注册内部API路由组
-	r.Route("/internal", func(r chi.Router) {
-		// 为内部路由组添加HMAC认证中间件
-		r.Use(middleware.InternalHMACAuth(a.Cfg.InternalHMACSecret))
-
-		// 内部任务和回调路由
-		r.Post("/tasks/{taskID}/callback", a.TaskCallback)                // 任务回调
-		r.Post("/runs/{runID}/steps", a.RunStepCallback)                  // 运行步骤回调
-		r.Post("/nl2sql", a.InternalNL2SQL)                               // 内部NL2SQL接口
-		r.Patch("/knowledge-docs/{docID}/status", a.KnowledgeDocCallback) // 知识文档状态回调
 	})
 
 	// 返回配置好的路由器

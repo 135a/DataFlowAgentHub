@@ -47,3 +47,69 @@ message RunAgentPipelineResponse {
   string error_message = 2;
   string final_report = 3;
 }
+
+// ──────── HubInternalService (Python → Go callbacks) ────────
+
+// HubInternalService is invoked by the Python AI worker to report results
+// back to the Go control plane (replaces the previous HTTP+HMAC callbacks).
+service HubInternalService {
+  // TaskCallback reports the result of an async task (agent pipeline).
+  rpc TaskCallback(TaskCallbackRequest) returns (TaskCallbackResponse);
+  // RunStepCallback reports the progress of a LangGraph step.
+  rpc RunStepCallback(RunStepCallbackRequest) returns (RunStepCallbackResponse);
+  // InternalNL2SQL executes a NL2SQL cycle via Go's security gate (sqlrun).
+  rpc InternalNL2SQL(InternalNL2SQLRequest) returns (InternalNL2SQLResponse);
+  // KnowledgeDocCallback reports the indexing status of a knowledge document.
+  rpc KnowledgeDocCallback(KnowledgeDocCallbackRequest) returns (KnowledgeDocCallbackResponse);
+}
+
+message TaskCallbackRequest {
+  string task_id = 1;
+  string status = 2;  // "succeeded" or "failed"
+  string result_json = 3;  // JSON-encoded result payload
+  string error_message = 4;
+}
+
+message TaskCallbackResponse {
+  string message = 1;
+}
+
+message RunStepCallbackRequest {
+  string run_id = 1;
+  string agent_name = 2;
+  string status = 3;  // "running", "succeeded", "failed"
+  string input_summary = 4;
+  string output_summary = 5;
+  string error_message = 6;
+}
+
+message RunStepCallbackResponse {
+  string message = 1;
+}
+
+message InternalNL2SQLRequest {
+  string trace_id = 1;
+  string user_message = 2;
+  string schema_json = 3;
+  string dialect = 4;
+}
+
+message InternalNL2SQLResponse {
+  string sql = 1;
+  string rows_json = 2;  // JSON-encoded result rows
+  string notes = 3;
+  bool ok = 4;
+  string error_message = 5;
+}
+
+message KnowledgeDocCallbackRequest {
+  string doc_id = 1;
+  string status = 2;  // "completed" or "failed"
+  string chroma_doc_id = 3;
+  int32 chunk_count = 4;
+  string error_message = 5;
+}
+
+message KnowledgeDocCallbackResponse {
+  string message = 1;
+}

@@ -87,8 +87,12 @@ func (c *Client) ChatCompletion(ctx context.Context, model, userPrompt string) (
 			lastErr = err
 			continue
 		}
-		b, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("read body: %w", err)
+			continue
+		}
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 			lastErr = fmt.Errorf("upstream %d", resp.StatusCode)
 			continue

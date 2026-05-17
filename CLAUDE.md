@@ -45,7 +45,7 @@ cd web && npm install && npm run dev                # Vite 开发服务器，默
 | 包 | 职责 |
 |---|---|
 | `handlers/` | HTTP 层。单一 `App` 结构体持有所有依赖（DB、Redis、gRPC 客户端、SSE 总线、配置），`Routes()` 通过 chi 挂载全部端点。 |
-| `middleware/` | TraceID 注入/提取、双认证（Bearer JWT / `X-Hub-Api-Key` 头）、RBAC 辅助函数（`RequireMinRole`，支持 viewer/operator/admin）、结构化请求日志。 |
+| `middleware/` | TraceID 注入/提取、JWT 认证、RBAC 辅助函数（`RequireMinRole`，支持 viewer/operator/admin）、结构化请求日志。 |
 | `config/` | 从 `HUB_*` 前缀的环境变量加载全部配置，仅 `HUB_JWT_SECRET` 为必填项。 |
 | `auth/` | JWT 签发/解析（HS256），Claims 包含 `UserID`、`WorkspaceID`、`Role`。 |
 | `worker/` | 连接 Python ai-worker 的 gRPC 客户端（`GenerateSQL`、`RunAgentPipeline`、`Health`）。 |
@@ -80,7 +80,7 @@ cd web && npm install && npm run dev                # Vite 开发服务器，默
 
 ### 关键设计决策
 
-- **双认证**：交互式用户使用 JWT（HS256，通过 `POST /v1/auth/login` 获取）；服务间调用使用 `X-Hub-Api-Key` 头。
+- **JWT 认证**：交互式用户使用 JWT（HS256，通过 `POST /v1/auth/login` 获取），Bcrypt 验证密码。
 - **只读 SQL 强制**：`sqlrun.IsReadOnlySQL()` 在执行前阻断写关键字。
 - **限流失效放行**：Redis 不可用时请求不受限流影响。
 - **过期保护**：异步任务设有 `expires_at`，后台 reaper goroutine 将过期任务标记为已过期。

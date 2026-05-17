@@ -3,7 +3,7 @@ info:
   title: DataFlowAgentHub API
   version: "0.1.0"
   description: |
-    控制面 HTTP API（MVP）。鉴权：Bearer JWT，或请求头 `X-Hub-Api-Key`（与 `HUB_GLOBAL_API_KEY` 匹配时视为 demo workspace admin）。
+    控制面 HTTP API（MVP）。鉴权：Bearer JWT，通过 `POST /v1/auth/login` 获取。
 servers:
   - url: http://localhost:8080
 paths:

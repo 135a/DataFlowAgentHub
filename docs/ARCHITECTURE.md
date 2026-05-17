@@ -307,13 +307,12 @@
 ```
                         请求进入 /v1/*
                               │
-              ┌───────────────┴───────────────┐
-              ▼                               ▼
-    X-Hub-Api-Key 头存在?            Authorization: Bearer <jwt>
-              │                               │
-              ▼                               ▼
-    ┌─────────────────┐           ┌──────────────────────┐
-    │ 全局 API Key    │           │ JWT 解析 (HS256)      │
+                              ▼
+                    Authorization: Bearer <jwt> (或 ?token= 查询参数)
+                              │
+                              ▼
+                    ┌──────────────────────┐
+                    │ JWT 解析 (HS256)      │
     │ 匹配 service    │           │ auth.Parse()          │
     │ api user        │           │                      │
     │ → admin 角色    │           │ 检查Redis吊销列表     │
@@ -533,7 +532,6 @@
   │  └── /v1/*  → 下文继续
   ▼
 [7] middleware.Auth (for /v1/*)
-  │   • 检查 X-Hub-Api-Key (全局 key → admin)
   │   • 检查 Bearer JWT (header 或 ?token 查询参数)
   │   • auth.Parse JWT 验证 HS256
   │   • auth.IsRevoked Redis 吊销检查

@@ -1,9 +1,10 @@
 package ssebus
 
 import (
-	"log/slog"
 	"sync"
 	"sync/atomic"
+
+	"go.uber.org/zap"
 )
 
 // Event 是一个小型可 JSON 序列化的 SSE 负载
@@ -12,15 +13,24 @@ type Event struct {
 	Data any    `json:"data"`
 }
 
+// Logger 用于 SSE 事件丢弃告警
+type Logger interface {
+	Warn(string, ...zap.Field)
+}
+
 type Bus struct {
 	mu         sync.Mutex
 	subs       map[string][]chan Event
 	totalDrops atomic.Int64
+	log        Logger
 }
 
 func New() *Bus {
 	return &Bus{subs: make(map[string][]chan Event)}
 }
+
+// SetLogger 设置告警日志器（可选，不设置则不记录丢弃）
+func (b *Bus) SetLogger(l Logger) { b.log = l }
 
 func (b *Bus) Subscribe(sessionID string) chan Event {
 	ch := make(chan Event, 32)
@@ -59,8 +69,11 @@ func (b *Bus) Publish(sessionID string, ev Event) {
 		case ch <- ev:
 		default:
 			drops := b.totalDrops.Add(1)
-			if drops%100 == 0 {
-				slog.Warn("sse event dropped", "session_id", sessionID, "total_drops", drops)
+			if b.log != nil && drops%10 == 0 {
+				b.log.Warn("sse event dropped",
+					zap.String("session_id", sessionID),
+					zap.Int64("total_drops", drops),
+				)
 			}
 		}
 	}

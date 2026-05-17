@@ -659,15 +659,10 @@ func (a *App) ListTables(w http.ResponseWriter, r *http.Request) {
 		t, ok := tableMap[tName]
 		if !ok {
 			tableOrder = append(tableOrder, tName)
-			lastVacStr := ""
-			if lastVac != nil {
-				lastVacStr = *lastVac
-			}
 			t = &tblInfo{Name: tName, RowEst: rowEst}
 			if lastVac != nil {
 				t.LastVacuum = lastVac
 			}
-			_ = lastVacStr
 			tableMap[tName] = t
 		}
 		t.Columns = append(t.Columns, colInfo{

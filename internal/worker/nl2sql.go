@@ -2,11 +2,15 @@ package worker
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"os"
 
 	nlv1 "github.com/dataflowagenthub/hub/internal/gen/nl2sql/v1"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
@@ -16,8 +20,40 @@ type NL2SQLClient struct {
 	c nlv1.NL2SQLServiceClient
 }
 
-func DialNL2SQL(addr string) (*grpc.ClientConn, *NL2SQLClient, error) {
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+// DialOpts 包含 gRPC 拨号选项（支持 mTLS 回退到 insecure）
+type DialOpts struct {
+	Addr          string
+	ClientCert    string
+	ClientKey     string
+	CACert        string
+}
+
+func DialNL2SQL(opts DialOpts) (*grpc.ClientConn, *NL2SQLClient, error) {
+	var creds credentials.TransportCredentials
+
+	if opts.ClientCert != "" && opts.ClientKey != "" && opts.CACert != "" {
+		cert, err := tls.LoadX509KeyPair(opts.ClientCert, opts.ClientKey)
+		if err != nil {
+			return nil, nil, err
+		}
+		caPEM, err := os.ReadFile(opts.CACert)
+		if err != nil {
+			return nil, nil, err
+		}
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM(caPEM) {
+			return nil, nil, err
+		}
+		creds = credentials.NewTLS(&tls.Config{
+			Certificates: []tls.Certificate{cert},
+			RootCAs:      caPool,
+			MinVersion:   tls.VersionTLS12,
+		})
+	} else {
+		creds = insecure.NewCredentials()
+	}
+
+	conn, err := grpc.Dial(opts.Addr, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return nil, nil, err
 	}

@@ -55,13 +55,19 @@ services:
       CHROMA_PORT: "8000"
       # NATS
       NATS_URL: nats://nats:4222
-      # Callback to Go API
-      HUB_API_INTERNAL_URL: http://api:8080
-      HUB_INTERNAL_HMAC_SECRET: ${HUB_INTERNAL_HMAC_SECRET}
+      # Callback to Go API (gRPC)
+      HUB_GO_GRPC_TARGET: api:9090
       HUB_ENV: ${HUB_ENV:-development}
       LANGGRAPH_DB_PATH: /data/langgraph/checkpoints.db
+      # mTLS 证书路径
+      HUB_GRPC_CA_CERT: /certs/ca.crt
+      HUB_GRPC_SERVER_CERT: /certs/py-server.crt
+      HUB_GRPC_SERVER_KEY: /certs/py-server.key
+      HUB_GRPC_CLIENT_CERT: /certs/py-client.crt
+      HUB_GRPC_CLIENT_KEY: /certs/py-client.key
     volumes:
       - langgraph_data:/data/langgraph
+      - ../../certs:/certs:ro
     expose:
       - "50051"
     depends_on:
@@ -74,6 +80,7 @@ services:
       dockerfile: Dockerfile.api
     environment:
       HUB_HTTP_ADDR: ":8080"
+      HUB_GRPC_ADDR: ":9090"
       HUB_DATABASE_URL: postgres://hub:hub@postgres:5432/hub?sslmode=disable
       HUB_REDIS_ADDR: redis:6379
       HUB_JWT_SECRET: ${HUB_JWT_SECRET}
@@ -86,11 +93,19 @@ services:
       HUB_LLM_MODEL: ${HUB_LLM_MODEL:-gpt-4o-mini}
       # NATS for async tasks
       HUB_NATS_URL: nats://nats:4222
-      HUB_INTERNAL_HMAC_SECRET: ${HUB_INTERNAL_HMAC_SECRET}
       HUB_DB_ENCRYPTION_KEY: ${HUB_DB_ENCRYPTION_KEY}
       HUB_ENV: ${HUB_ENV:-development}
+      # mTLS 证书路径
+      HUB_GRPC_CA_CERT: /certs/ca.crt
+      HUB_GRPC_SERVER_CERT: /certs/go-server.crt
+      HUB_GRPC_SERVER_KEY: /certs/go-server.key
+      HUB_GRPC_CLIENT_CERT: /certs/go-client.crt
+      HUB_GRPC_CLIENT_KEY: /certs/go-client.key
     ports:
       - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - ../../certs:/certs:ro
     depends_on:
       - postgres
       - redis
