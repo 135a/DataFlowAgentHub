@@ -1,4 +1,4 @@
-# 冒烟清单（面试演示）
+# 冒烟清单
 
 1. **健康**：`GET /health` 返回 `postgres` / `redis` 为 `ok`。
 2. **登录**：`POST /v1/auth/login` 使用种子账号拿到 `access_token`。
