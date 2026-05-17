@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 )
 
-// Event is a small JSON-serializable SSE payload.
+// Event 是一个小型可 JSON 序列化的 SSE 负载
 type Event struct {
 	Type string `json:"type"`
 	Data any    `json:"data"`

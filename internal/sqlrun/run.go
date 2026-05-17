@@ -15,7 +15,7 @@ var writeKeywords = []string{
 	"MERGE ", "GRANT ", "REVOKE ", "CALL ",
 }
 
-// IsReadOnlySQL returns false if the statement appears to contain write DDL/DML.
+// IsReadOnlySQL 如果语句包含写 DDL/DML 则返回错误
 func IsReadOnlySQL(sql string) error {
 	u := " " + strings.ToUpper(strings.TrimSpace(sql)) + " "
 	for _, k := range writeKeywords {
@@ -26,7 +26,7 @@ func IsReadOnlySQL(sql string) error {
 	return nil
 }
 
-// QueryRows executes a SELECT-like query with timeout and max rows (wrapped).
+// QueryRows 执行类 SELECT 查询，带超时和最大行数限制（包装后）
 func QueryRows(ctx context.Context, pool *pgxpool.Pool, sql string, maxRows int32, timeout time.Duration) ([]map[string]any, error) {
 	sql = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(sql), ";"))
 	if err := IsReadOnlySQL(sql); err != nil {
@@ -65,10 +65,10 @@ func QueryRows(ctx context.Context, pool *pgxpool.Pool, sql string, maxRows int3
 	return out, nil
 }
 
-// Ping checks database connectivity.
+// Ping 检查数据库连接是否正常
 func Ping(ctx context.Context, pool *pgxpool.Pool) error {
 	return pool.Ping(ctx)
 }
 
-// ErrNoRows wraps pgx.ErrNoRows for handlers.
+// ErrNoRows 封装 pgx.ErrNoRows 供 handler 使用
 var ErrNoRows = pgx.ErrNoRows

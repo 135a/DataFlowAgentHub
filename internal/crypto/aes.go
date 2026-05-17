@@ -9,8 +9,8 @@ import (
 	"io"
 )
 
-// Encrypt encrypts plaintext using AES-256-GCM with the given hex-encoded key.
-// Returns the ciphertext as a hex-encoded string (nonce + encrypted data).
+// Encrypt 使用 AES-256-GCM 和给定的十六进制密钥加密明文。
+// 返回十六进制编码的密文字符串（nonce + 加密数据）。
 func Encrypt(plaintext, keyHex string) (string, error) {
 	key, err := hex.DecodeString(keyHex)
 	if err != nil {
@@ -35,12 +35,12 @@ func Encrypt(plaintext, keyHex string) (string, error) {
 		return "", fmt.Errorf("generate nonce: %w", err)
 	}
 
-	// nonce + ciphertext, hex-encoded
+	// nonce + 密文，十六进制编码
 	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
 	return hex.EncodeToString(ciphertext), nil
 }
 
-// Decrypt decrypts a hex-encoded ciphertext (nonce + encrypted data) using AES-256-GCM.
+// Decrypt 使用 AES-256-GCM 解密十六进制编码的密文（nonce + 加密数据）。
 func Decrypt(cipherHex, keyHex string) (string, error) {
 	key, err := hex.DecodeString(keyHex)
 	if err != nil {

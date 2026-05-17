@@ -3,19 +3,80 @@ import { Link } from "react-router-dom";
 import { apiFetch, apiJson, getSSEUrl } from "./api";
 import { ResultTable } from "./ResultTable";
 import { ChartView } from "./components/ChartView";
+import { ModeSelector } from "./components/ModeSelector";
+import { ProgressPanel } from "./components/ProgressPanel";
+import type { StepDef, StepState } from "./components/ProgressPanel";
 import type {
   Session,
   ApiMessage,
   MessageContent,
   RunStep,
-  ApprovalTask,
   SessionsResponse,
   MessagesResponse,
   CreateSessionResponse,
-  ApprovalsResponse,
   SSETokenResponse,
   PostMessageResponse,
 } from "./types/api";
+
+type QueryMode = "quick" | "deep";
+
+const QUICK_STEPS: StepDef[] = [
+  { name: "SQL 生成", weight: 0.7 },
+  { name: "执行查询", weight: 0.3 },
+];
+
+const DEEP_STEPS: StepDef[] = [
+  { name: "SQL 生成", weight: 0.15 },
+  { name: "数据分析", weight: 0.25 },
+  { name: "图表绘制", weight: 0.40 },
+  { name: "报告生成", weight: 0.20 },
+];
+
+const AGENT_STEP_MAP: Record<string, number> = {
+  nl2sql_node: 0,
+  analysis_node: 1,
+  chart_node: 2,
+  report_node: 3,
+};
+
+const STEP_DEFAULTS: Record<string, number> = {
+  "SQL 生成": 2000,
+  "执行查询": 300,
+  "数据分析": 3500,
+  "图表绘制": 4500,
+  "报告生成": 2000,
+};
+
+function loadStepHistory(): Record<string, number[]> {
+  try {
+    return JSON.parse(localStorage.getItem("stepHistory") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function getAvgDuration(history: Record<string, number[]>, stepName: string): number {
+  const durations = history[stepName];
+  if (!durations || durations.length === 0) return STEP_DEFAULTS[stepName] || 2000;
+  return durations.reduce((a, b) => a + b, 0) / durations.length;
+}
+
+function calcInitialEstimate(steps: StepDef[], history: Record<string, number[]>): number {
+  return steps.reduce((total, s) => total + getAvgDuration(history, s.name), 0);
+}
+
+function makeWaitingStates(n: number): StepState[] {
+  return Array.from({ length: n }, (_, i) => ({
+    status: i === 0 ? "running" as const : "waiting" as const,
+    durationMs: 0,
+  }));
+}
+
+function fmtModeDesc(mode: QueryMode): string {
+  return mode === "quick"
+    ? "⚡ 快速查询：AI 生成 SQL 并直接执行返回结果，预计等待 1-3 秒，适合简单数据查询"
+    : "🔬 深度分析：AI 将依次执行 SQL 生成 → 数据分析 → 图表绘制 → 报告生成，预计等待 5-15 秒，适合复杂数据分析";
+}
 
 export function App() {
   const token = useMemo(() => localStorage.getItem("token"), []);
@@ -24,10 +85,105 @@ export function App() {
   const [messages, setMessages] = useState<ApiMessage[]>([]);
   const [runSteps, setRunSteps] = useState<RunStep[]>([]);
   const [sendStatus, setSendStatus] = useState<string>("");
-  const [deepAnalysis, setDeepAnalysis] = useState(false);
+  const [mode, setMode] = useState<QueryMode>(() => {
+    return (localStorage.getItem("queryMode") as QueryMode) || "deep";
+  });
   const [sending, setSending] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const sseRetries = useRef(0);
+
+  // ---- progress tracking state ----
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [currentSteps, setCurrentSteps] = useState<StepDef[]>([]);
+  const [stepStates, setStepStates] = useState<StepState[]>([]);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [estimatedRemainingMs, setEstimatedRemainingMs] = useState<number | null>(null);
+  const timerRef = useRef<number | null>(null);
+  const sendStartRef = useRef(0);
+  const stepTimestampsRef = useRef<number[]>([]);
+
+  function stopTimer() {
+    if (timerRef.current !== null) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }
+
+  function startTimer() {
+    stopTimer();
+    sendStartRef.current = Date.now();
+    setElapsedMs(0);
+    timerRef.current = window.setInterval(() => {
+      setElapsedMs(Date.now() - sendStartRef.current);
+    }, 200);
+  }
+
+  function saveStepHistory(durations: number[]) {
+    try {
+      const history = loadStepHistory();
+      currentSteps.forEach((s, i) => {
+        const arr = history[s.name] || [];
+        arr.push(durations[i]);
+        history[s.name] = arr;
+      });
+      localStorage.setItem("stepHistory", JSON.stringify(history));
+    } catch { /* ignore storage errors */ }
+  }
+
+  function updateStepByIndex(idx: number, status: StepState["status"]) {
+    setStepStates(prev => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], status };
+      return next;
+    });
+  }
+
+  function updateStepDuration(idx: number) {
+    const elapsed = Date.now() - sendStartRef.current;
+    setStepStates(prev => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], durationMs: elapsed };
+      return next;
+    });
+  }
+
+  function completeStep(idx: number) {
+    updateStepDuration(idx);
+    updateStepByIndex(idx, "completed");
+    // 启动下一步
+    setStepStates(prev => {
+      const next = [...prev];
+      if (idx + 1 < next.length) {
+        next[idx + 1] = { ...next[idx + 1], status: "running", durationMs: 0 };
+      }
+      return next;
+    });
+    stepTimestampsRef.current[idx] = Date.now() - sendStartRef.current;
+    // 更新预估
+    setStepStates(prev => {
+      const completedDurations = prev
+        .map((st, i) => ({ st, weight: currentSteps[i]?.weight ?? 0, idx: i }))
+        .filter(x => x.st.status === "completed" && x.st.durationMs > 0);
+      if (completedDurations.length > 0) {
+        const totalWeight = completedDurations.reduce((s, x) => s + x.weight, 0);
+        const totalTime = completedDurations.reduce((s, x) => s + x.st.durationMs, 0);
+        const avgPerWeight = totalTime / totalWeight;
+        const remainingWeight = currentSteps.slice(idx + 1).reduce((s, x) => s + x.weight, 0);
+        setEstimatedRemainingMs(avgPerWeight * remainingWeight);
+      }
+      return prev;
+    });
+  }
+
+  function finishProcessing() {
+    stopTimer();
+    // 保存耗时记录
+    const durations = currentSteps.map((_, i) => stepTimestampsRef.current[i] || 0);
+    saveStepHistory(durations);
+    setIsProcessing(false);
+  }
+
+  // ---- end progress tracking ----
 
   useEffect(() => {
     void (async () => {
@@ -60,6 +216,11 @@ export function App() {
     };
   }, []);
 
+  function handleModeChange(newMode: QueryMode) {
+    setMode(newMode);
+    localStorage.setItem("queryMode", newMode);
+  }
+
   function startSSE(sessionId: string) {
     esRef.current?.close();
 
@@ -81,7 +242,7 @@ export function App() {
   }
 
   function connectSSE(url: string, sessionId: string) {
-    sseRetries.current = 0; // reset on successful connection
+    sseRetries.current = 0;
     const es = new EventSource(url);
     esRef.current = es;
 
@@ -89,18 +250,45 @@ export function App() {
       es.close();
       setSendStatus("完成");
       setSending(false);
+      // 标记剩余步骤为完成
+      setStepStates(prev => {
+        const next = [...prev];
+        for (let i = 0; i < next.length; i++) {
+          if (next[i].status !== "completed") {
+            next[i] = { ...next[i], status: "completed", durationMs: Date.now() - sendStartRef.current };
+            stepTimestampsRef.current[i] = Date.now() - sendStartRef.current;
+          }
+        }
+        return next;
+      });
+      setTimeout(() => finishProcessing(), 500);
       loadMessages();
     });
 
     es.addEventListener("agent_step", (e) => {
       try {
         const step = JSON.parse((e as MessageEvent).data) as RunStep;
-        setSendStatus(`[${step.agent_name}] ${step.status}`);
+        const idx = AGENT_STEP_MAP[step.agent_name];
+        if (idx === undefined) return;
+        if (step.status === "running") {
+          updateStepDuration(idx);
+          setStepStates(prev => {
+            const next = [...prev];
+            next[idx] = { ...next[idx], status: "running", durationMs: 0 };
+            return next;
+          });
+        } else if (step.status === "succeeded") {
+          completeStep(idx);
+        } else if (step.status === "failed") {
+          updateStepDuration(idx);
+          updateStepByIndex(idx, "error");
+        }
       } catch { /* ignore parse errors */ }
     });
 
-    es.addEventListener("approval_required", () => {
-      setSendStatus("需要审批");
+    es.addEventListener("sql_generated", () => {
+      // 同步路径：步骤0（SQL生成）完成
+      completeStep(0);
     });
 
     es.addEventListener("error", (e) => {
@@ -111,6 +299,8 @@ export function App() {
         setSendStatus("错误");
       }
       es.close();
+      updateStepByIndex(0, "error");
+      setTimeout(() => finishProcessing(), 300);
       loadMessages();
     });
 
@@ -123,9 +313,22 @@ export function App() {
 
   async function send(text: string) {
     if (!sid || !token) return;
-    setSendStatus("发送中...");
+    setSendStatus("");
     setSending(true);
-    const workflow = deepAnalysis ? "agent_pipeline" : "auto";
+
+    // 初始化进度追踪
+    const steps = mode === "deep" ? DEEP_STEPS : QUICK_STEPS;
+    setCurrentSteps(steps);
+    const initialStates = makeWaitingStates(steps.length);
+    setStepStates(initialStates);
+    stepTimestampsRef.current = [];
+    const history = loadStepHistory();
+    const initialEstimate = calcInitialEstimate(steps, history);
+    setEstimatedRemainingMs(initialEstimate);
+    setIsProcessing(true);
+    startTimer();
+
+    const workflow = mode === "deep" ? "agent_pipeline" : "auto";
     try {
       const r = await apiFetch(`/v1/sessions/${sid}/messages`, {
         method: "POST",
@@ -134,20 +337,26 @@ export function App() {
       });
 
       if (r.status === 202) {
-        const j = await r.json() as PostMessageResponse;
-        setSendStatus(`任务处理中 (task: ${j.task_id})，SSE 监听中...`);
+        // 异步路径：SSE 事件驱动进度
         startSSE(sid);
       } else if (r.ok) {
-        setSendStatus("完成");
+        // 同步路径：直接完成所有步骤
+        for (let i = 0; i < steps.length; i++) {
+          stepTimestampsRef.current[i] = Date.now() - sendStartRef.current;
+        }
+        setStepStates(prev => prev.map(st => ({ ...st, status: "completed" as const })));
         setSending(false);
+        setTimeout(() => finishProcessing(), 500);
         await loadMessages();
       } else {
         setSendStatus(`${r.status}`);
         setSending(false);
+        setTimeout(() => finishProcessing(), 300);
       }
     } catch {
       setSendStatus("网络错误，请重试");
       setSending(false);
+      setTimeout(() => finishProcessing(), 300);
     }
   }
 
@@ -211,22 +420,37 @@ export function App() {
               e.currentTarget.reset();
             }}
           >
-            <input name="t" placeholder="例如：how many rows in demo_sales" style={{ width: "60%" }} />
-            <label style={{ marginLeft: 12, fontSize: 14, cursor: "pointer" }}>
+            <ModeSelector mode={mode} onChange={handleModeChange} />
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <input
-                type="checkbox"
-                checked={deepAnalysis}
-                onChange={(e) => setDeepAnalysis(e.target.checked)}
+                name="t"
+                placeholder="例如：how many rows in demo_sales"
+                style={{ flex: 1, padding: "6px 10px", fontSize: 14 }}
+                disabled={sending}
               />
-              {" "}深度分析
-            </label>
-            <button type="submit" style={{ marginLeft: 8 }} disabled={sending}>发送</button>
+              <button type="submit" style={{ padding: "6px 16px" }} disabled={sending}>
+                {sending ? "处理中..." : "发送"}
+              </button>
+            </div>
           </form>
-          {sendStatus ? (
-            <p style={{ fontSize: 13, color: "#444", margin: "8px 0 0" }}>
+
+          {isProcessing ? (
+            <ProgressPanel
+              steps={currentSteps}
+              stepStates={stepStates}
+              elapsedMs={elapsedMs}
+              estimatedRemainingMs={estimatedRemainingMs}
+            />
+          ) : sendStatus ? (
+            <p style={{ fontSize: 13, color: sendStatus.startsWith("错误") ? "#dc2626" : "#444", margin: "8px 0 0" }}>
               {sendStatus}
             </p>
-          ) : null}
+          ) : (
+            <p style={{ fontSize: 13, color: "#6b7280", margin: "8px 0 0" }}>
+              {fmtModeDesc(mode)}
+            </p>
+          )}
+
           <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
             {messages.map((m) => (
               <MessageBlock key={m.id} msg={m} />
@@ -251,10 +475,6 @@ export function App() {
           </div>
         </section>
       )}
-      <section style={{ marginTop: 24 }}>
-        <h2>审批（需 operator/admin）</h2>
-        <Approvals token={token!} />
-      </section>
     </div>
   );
 }
@@ -397,61 +617,3 @@ function SqlResultBlock({ sql, rows, hasNumeric, notes }: {
   );
 }
 
-function Approvals({ token }: { token: string }) {
-  const [items, setItems] = useState<ApprovalTask[]>([]);
-  const load = async () => {
-    try {
-      const j = await apiJson<ApprovalsResponse>("/v1/approvals", { token });
-      setItems(j.items || []);
-    } catch {
-      setItems([]);
-    }
-  };
-  useEffect(() => {
-    void load();
-  }, [token]);
-  return (
-    <div>
-      <button type="button" onClick={() => void load()}>
-        刷新
-      </button>
-      {items.length === 0 ? (
-        <p style={{ color: "#999", fontSize: 13 }}>暂无待审批项</p>
-      ) : (
-        <ul>
-          {items.map((it) => (
-            <li key={it.id}>
-              {it.action_type}{" "}
-              <button
-                type="button"
-                onClick={async () => {
-                  await apiFetch(`/v1/approvals/${it.id}/decide`, {
-                    method: "POST",
-                    token,
-                    body: JSON.stringify({ decision: "approve" }),
-                  });
-                  void load();
-                }}
-              >
-                批准
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  await apiFetch(`/v1/approvals/${it.id}/decide`, {
-                    method: "POST",
-                    token,
-                    body: JSON.stringify({ decision: "reject" }),
-                  });
-                  void load();
-                }}
-              >
-                驳回
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}

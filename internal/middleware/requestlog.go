@@ -9,7 +9,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// RequestLog logs one line per request with trace id; Authorization is redacted.
+// RequestLog 记录每个请求的日志行，包含 trace id；Authorization 头部会被脱敏
 func RequestLog(log *zap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

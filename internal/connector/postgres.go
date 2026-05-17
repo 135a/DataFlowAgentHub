@@ -9,19 +9,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Postgres holds a connection pool for introspection / ping (MVP).
+// Postgres 持有用于探测和变更的连接池（MVP）。
 type Postgres struct {
 	Pool *pgxpool.Pool
 }
 
-// Ping checks connectivity.
+// Ping 检查连接是否正常。
 func (p *Postgres) Ping(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return p.Pool.Ping(ctx)
 }
 
-// ListPublicTables returns table names in public schema (MVP metadata).
+// ListPublicTables 返回 public schema 中的表名列表（MVP 元数据）。
 func (p *Postgres) ListPublicTables(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -44,7 +44,7 @@ func (p *Postgres) ListPublicTables(ctx context.Context) ([]string, error) {
 	return names, rows.Err()
 }
 
-// DSN builds a postgres URL from parts (user/password URL-escaped).
+// DSN 从各部分构建 PostgreSQL URL（user/password 已 URL 转义）。
 func DSN(host string, port int, user, password, database, sslmode string) string {
 	if sslmode == "" {
 		sslmode = "disable"

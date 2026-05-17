@@ -10,9 +10,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// Init registers a TracerProvider with W3C TraceContext propagator.
-// If HUB_OTEL_EXPORTER_ENDPOINT is set, enables OTLP gRPC trace export.
-// Returns a shutdown function for cleanup on process exit.
+// Init 注册带有 W3C TraceContext 传播器的 TracerProvider。如果设置了 HUB_OTEL_EXPORTER_ENDPOINT，则启用 OTLP gRPC 追踪导出。返回用于进程退出时清理的关闭函数。
 func Init() (func(context.Context) error, error) {
 	opts := []sdktrace.TracerProviderOption{}
 

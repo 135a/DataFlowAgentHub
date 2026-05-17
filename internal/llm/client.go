@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Client is a minimal OpenAI-compatible chat HTTP client (retries on 429/5xx).
+// Client 是最小化的 OpenAI 兼容聊天 HTTP 客户端（429/5xx 时自动重试）
 type Client struct {
 	BaseURL    string
 	APIKey     string
@@ -41,7 +41,7 @@ type chatResponse struct {
 	} `json:"error"`
 }
 
-// ChatCompletion calls POST /v1/chat/completions with retries.
+// ChatCompletion 调用 POST /v1/chat/completions 并支持重试
 func (c *Client) ChatCompletion(ctx context.Context, model, userPrompt string) (string, error) {
 	if c.APIKey == "" {
 		return "", fmt.Errorf("missing API key")

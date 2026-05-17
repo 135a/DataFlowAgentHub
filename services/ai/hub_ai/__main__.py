@@ -148,7 +148,7 @@ def main():
             return sql, "openai"
 
         def _format_schema(self, schema_json: str) -> str:
-            """Convert schema JSON to human-readable table descriptions with truncation."""
+            """将 schema JSON 转换为可读的表描述信息（带截断）。"""
             import json
             MAX_CHARS = 6000
             try:

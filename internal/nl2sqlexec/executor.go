@@ -11,13 +11,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// NL2SQLClient is the interface for generating SQL from natural language.
-// The existing *worker.NL2SQLClient satisfies this interface automatically.
+// NL2SQLClient 是从自然语言生成 SQL 的接口。现有的 *worker.NL2SQLClient 自动满足此接口。
 type NL2SQLClient interface {
 	GenerateSQL(ctx context.Context, traceID, sessionID, userMessage, schemaJSON, dialect string) (*nlv1.GenerateSQLResponse, error)
 }
 
-// Input contains the parameters for an NL2SQL execution.
+// Input 包含 NL2SQL 执行的参数
 type Input struct {
 	TraceID     string
 	SessionID   string
@@ -26,22 +25,21 @@ type Input struct {
 	Dialect     string
 }
 
-// Result contains the output of an NL2SQL execution.
+// Result 包含 NL2SQL 执行的输出
 type Result struct {
 	SQL            string
 	Rows           []map[string]any
 	SelfCheckNotes string
 }
 
-// Executor encapsulates the NL2SQL execution pipeline:
-// gRPC GenerateSQL → readonly check → SQL execution → result.
+// Executor 封装了 NL2SQL 执行管道：gRPC GenerateSQL → 只读检查 → SQL 执行 → 结果
 type Executor struct {
 	client  NL2SQLClient
 	maxRows int32
 	timeout time.Duration
 }
 
-// NewExecutor creates a new Executor with the given dependencies.
+// NewExecutor 创建具有给定依赖项的 Executor
 func NewExecutor(client NL2SQLClient, maxRows int32, timeout time.Duration) *Executor {
 	return &Executor{
 		client:  client,
@@ -50,9 +48,7 @@ func NewExecutor(client NL2SQLClient, maxRows int32, timeout time.Duration) *Exe
 	}
 }
 
-// Execute runs the full NL2SQL pipeline and returns the result.
-// On gRPC or generation error, Result is nil.
-// On SQL execution error, Result contains the generated SQL for debugging.
+// Execute 运行完整的 NL2SQL 管道并返回结果。gRPC 或生成错误时 Result 为 nil。SQL 执行错误时 Result 中包含生成的 SQL 供调试。
 func (e *Executor) Execute(ctx context.Context, input Input, pool *pgxpool.Pool) (*Result, error) {
 	gen, err := e.client.GenerateSQL(ctx, input.TraceID, input.SessionID, input.UserMessage, input.SchemaJSON, input.Dialect)
 	if err != nil {
@@ -75,7 +71,7 @@ func (e *Executor) Execute(ctx context.Context, input Input, pool *pgxpool.Pool)
 	}, nil
 }
 
-// GenerateError represents an error returned by the NL2SQL generation step.
+// GenerateError 表示 NL2SQL 生成步骤返回的错误
 type GenerateError struct {
 	Message string
 }

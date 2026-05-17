@@ -67,12 +67,6 @@ export interface KnowledgeDoc {
   created_at: string;
 }
 
-// ── Approval ──
-export interface ApprovalTask {
-  id: string;
-  action_type: string;
-}
-
 // ── Auth ──
 export interface LoginResponse {
   access_token: string;
@@ -98,10 +92,6 @@ export interface DataSourcesResponse {
 
 export interface KnowledgeDocsResponse {
   docs: KnowledgeDoc[];
-}
-
-export interface ApprovalsResponse {
-  items: ApprovalTask[];
 }
 
 export interface CreateSessionResponse {

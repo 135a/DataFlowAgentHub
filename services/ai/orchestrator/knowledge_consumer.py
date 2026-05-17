@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 async def process_knowledge_message(msg):
-    """Process a knowledge indexing task: chunk document, embed, store in ChromaDB."""
+    """处理知识索引任务：文档分块、嵌入、存入 ChromaDB。"""
     api_url = os.environ.get("HUB_API_INTERNAL_URL", "http://api:8080")
     secret = os.environ.get("HUB_INTERNAL_HMAC_SECRET", "dev-hmac-secret-change-me")
     doc_id = ""
@@ -33,13 +33,13 @@ async def process_knowledge_message(msg):
             await msg.ack()
             return
 
-        # Initialize KnowledgeBase for this workspace
+        # 为工作区初始化知识库
         kb = KnowledgeBase(workspace_id)
 
-        # Chunk and embed
+        # 分块和嵌入
         chunk_count = kb.add_document(doc_id=doc_id, title=title, text_content=content)
 
-        # Callback to Go API: success
+        # 回调 Go API：成功
         cb_payload = {"status": "completed", "chunk_count": chunk_count}
         body_bytes = json.dumps(cb_payload).encode()
         async with httpx.AsyncClient() as client:
@@ -57,7 +57,7 @@ async def process_knowledge_message(msg):
     except Exception as e:
         logger.error(f"Knowledge indexing failed for {doc_id}: {e}", exc_info=True)
 
-        # Callback failure status
+        # 回调失败状态
         if doc_id:
             try:
                 cb_payload = {"status": "failed", "error_message": str(e)}

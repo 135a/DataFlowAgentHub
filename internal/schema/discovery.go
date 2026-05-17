@@ -11,31 +11,31 @@ import (
 	"go.uber.org/zap"
 )
 
-// ColumnSchema represents a single database column.
+// ColumnSchema 表示单个数据库列
 type ColumnSchema struct {
 	Name     string `json:"name"`
 	Type     string `json:"type"`
 	Nullable bool   `json:"nullable"`
 }
 
-// TableSchema represents a table with its columns.
+// TableSchema 表示表及其列
 type TableSchema struct {
 	Name    string         `json:"name"`
 	Columns []ColumnSchema `json:"columns"`
 }
 
-// SchemaResult is the top-level container for discovered schema.
+// SchemaResult 是已发现 schema 的顶层容器
 type SchemaResult struct {
 	Tables []TableSchema `json:"tables"`
 }
 
-// DiscoverSchema connects to the given pool and queries information_schema.columns
-// to discover tables and columns in the public schema, respecting configured max limits.
+// DiscoverSchema 连接到指定连接池并查询 information_schema.columns
+// 以发现 public schema 中的表和列，受配置的最大数量限制
 func DiscoverSchema(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, log *zap.Logger) (*SchemaResult, error) {
 	qCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	// Only scan the public schema for MVP safety; keep catalog_name = current_database() implicitly.
+	// 为 MVP 安全性只扫描 public schema；隐式保留 catalog_name = current_database()
 	rows, err := pool.Query(qCtx, `
 		SELECT table_name, column_name, data_type, is_nullable
 		FROM information_schema.columns
@@ -47,7 +47,7 @@ func DiscoverSchema(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config,
 	}
 	defer rows.Close()
 
-	// Aggregate columns by table name, maintaining insertion order.
+	// 按表名聚合列，维护插入顺序
 	tableMap := make(map[string][]ColumnSchema)
 	var tableOrder []string
 	maxCols := int(cfg.SchemaMaxColumnsPerTable)
@@ -69,7 +69,7 @@ func DiscoverSchema(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config,
 			cols = make([]ColumnSchema, 0, 10)
 		}
 		if len(cols) >= maxCols {
-			continue // silently skip columns beyond limit for this table
+			continue // 静默跳过超出限制的列
 		}
 		tableMap[t] = append(cols, ColumnSchema{
 			Name:     c,
@@ -89,8 +89,7 @@ func DiscoverSchema(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config,
 	return &SchemaResult{Tables: tables}, nil
 }
 
-// ToJSON serializes the SchemaResult to a compact JSON string
-// suitable for passing as schema_json to the NL2SQL worker.
+// ToJSON 将 SchemaResult 序列化为紧凑的 JSON 字符串，适合作为 schema_json 传递给 NL2SQL 工作节点
 func (sr *SchemaResult) ToJSON() (string, error) {
 	b, err := json.Marshal(sr)
 	if err != nil {
@@ -99,8 +98,7 @@ func (sr *SchemaResult) ToJSON() (string, error) {
 	return string(b), nil
 }
 
-// ConnectToExternalDataSource creates a temporary connection pool for schema discovery.
-// The caller MUST close the returned pool.
+// ConnectToExternalDataSource 为 schema 发现创建临时连接池。调用者必须关闭返回的连接池。
 func ConnectToExternalDataSource(ctx context.Context, host string, port int, database, username, password, sslmode string) (*pgxpool.Pool, error) {
 	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
 		username, password, host, port, database, sslmode)

@@ -57,7 +57,7 @@ func (c *Client) EnqueueTask(ctx context.Context, wsID, sessionID, runID, taskTy
 	if c.NATS != nil {
 		if err := c.NATS.Publish("hub.tasks."+taskType, msg); err != nil {
 			c.Log.Error("publish to nats failed", zap.Error(err))
-			// Even if NATS publish fails, we return the task ID, it could be picked up by polling
+			// 即使 NATS 发布失败，也返回任务 ID，可通过轮询获取
 		}
 	}
 

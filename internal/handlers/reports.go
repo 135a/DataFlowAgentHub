@@ -12,18 +12,18 @@ import (
 
 var uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
-// DownloadReport allows downloading the generated excel report for a run
+// DownloadReport 允许下载指定运行的 Excel 报告
 func (a *App) DownloadReport(w http.ResponseWriter, r *http.Request) {
 	_ = middleware.ClaimsFromContext(r.Context())
 	runID := chi.URLParam(r, "runID")
 
-	// Validate UUID v4 format to prevent path traversal
+	// 验证 UUID v4 格式以防止路径遍历攻击
 	if !uuidRE.MatchString(runID) {
 		errJSON(w, http.StatusBadRequest, "invalid run id format")
 		return
 	}
 
-	// Ensure the run belongs to the user/workspace
+	// 确保运行属于当前用户/工作区
 	var status string
 	err := a.DB.QueryRow(r.Context(), `SELECT status FROM runs WHERE id = $1::uuid`, runID).Scan(&status)
 	if err != nil {

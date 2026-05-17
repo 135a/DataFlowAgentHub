@@ -43,17 +43,17 @@ var (
 	)
 )
 
-// NL2SQLDuration returns the histogram for NL2SQL call duration tracking.
+// NL2SQLDuration 返回 NL2SQL 调用时长追踪的直方图
 func NL2SQLDuration() prometheus.Histogram {
 	return nl2sqlDuration
 }
 
-// AgentPipelineTasks returns the counter for agent pipeline task submissions.
+// AgentPipelineTasks 返回 agent 管道任务提交数的计数器
 func AgentPipelineTasks() prometheus.Counter {
 	return agentPipelineTasks
 }
 
-// PrometheusMiddleware records request counts and latency.
+// PrometheusMiddleware 记录请求计数和延迟
 func PrometheusMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -70,7 +70,7 @@ func PrometheusMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// Handler serves process + custom registry metrics.
+// Handler 提供进程及自定义注册表指标端点
 func Handler() http.Handler {
 	return promhttp.Handler()
 }

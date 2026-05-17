@@ -33,7 +33,7 @@ import (
 
 const version = "0.1.0-dev"
 
-// App wires HTTP dependencies.
+// App 封装 HTTP 依赖项
 type App struct {
 	Cfg        *config.Config
 	Log        *zap.Logger
@@ -56,7 +56,7 @@ func errJSON(w http.ResponseWriter, status int, msg string) {
 	JSON(w, status, map[string]string{"error": msg})
 }
 
-// Login accepts seed user credentials and returns a JWT.
+// Login 接受种子用户凭证并返回 JWT
 func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Email    string `json:"email"`
@@ -95,11 +95,11 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func bcryptCompare(pw, hash string) error {
-	// local import would cycle — use golang.org/x/crypto/bcrypt in same package file bcrypt.go
+	// 本地导入会导致循环引用 — 改用同包文件 bcrypt.go 中的 golang.org/x/crypto/bcrypt
 	return compareBcrypt(pw, hash)
 }
 
-// Health reports readiness of Postgres and Redis.
+// Health 报告 Postgres 和 Redis 的就绪状态
 func (a *App) Health(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
@@ -198,7 +198,7 @@ func (a *App) ListMessages(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Fetch run steps
+	// 查询运行步骤
 	stepRows, err := a.DB.Query(r.Context(), `
 		SELECT step_index, agent_name, status, input_summary, output_summary, error_message, created_at 
 		FROM agent_run_steps 
@@ -235,7 +235,7 @@ func (a *App) CreateSession(w http.ResponseWriter, r *http.Request) {
 	if title == "" {
 		title = "New session"
 	}
-	// Validate data_source_id if provided: must be a valid UUID owned by this workspace
+	// 如果提供了 data_source_id，验证其必须是属于此工作区的有效 UUID
 	var dsID *string
 	if ds := strings.TrimSpace(body.DataSourceID); ds != "" {
 		var existing string
@@ -269,33 +269,40 @@ func (a *App) CreateSession(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusCreated, map[string]any{"id": id, "title": title})
 }
 
+// PostMessage 处理用户发送的消息请求
 func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
+	// 从请求上下文中获取用户认证信息
 	c := middleware.ClaimsFromContext(r.Context())
+	// 从URL参数中获取会话ID
 	sid := chi.URLParam(r, "sessionID")
+	// 检查消息发送频率限制/
 	if ok, _ := ratelimit.Allow(r.Context(), a.Redis, "msg:"+c.UserID, 30, time.Minute); !ok {
 		errJSON(w, http.StatusTooManyRequests, "rate limit")
 		return
 	}
+	// 定义请求体结构
 	var body struct {
-		Text     string `json:"text"`
-		Workflow string `json:"workflow"`
+		Text     string `json:"text"`     // 消息内容
+		Workflow string `json:"workflow"` // 工作流类型
 	}
+	// 解析请求体并验证消息内容
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Text) == "" {
 		errJSON(w, http.StatusBadRequest, "text required")
 		return
 	}
+	// 获取请求上下文和追踪信息
 	ctx := r.Context()
 	trace := middleware.TraceFromContext(ctx)
 
-	// Ensure session in workspace, also look up data_source_id
-	var ws string
-	var dsID, dsKind *string
-	err := a.DB.QueryRow(ctx, `SELECT workspace_id::text FROM sessions WHERE id = $1::uuid`, sid).Scan(&ws)
-	if err != nil || ws != c.WorkspaceID {
-		errJSON(w, http.StatusNotFound, "session not found")
-		return
+	// 确保会话属于该工作区，同时查找 data_source_id
+	var ws string                                                                                           // 声明一个字符串变量ws，用于存储workspace_id
+	var dsID, dsKind *string                                                                                // 声明两个字符串指针变量dsID和dsKind，用于存储数据源ID和数据源类型
+	err := a.DB.QueryRow(ctx, `SELECT workspace_id::text FROM sessions WHERE id = $1::uuid`, sid).Scan(&ws) // 执行SQL查询，从sessions表中查询指定ID的session的workspace_id，并将其转换为字符串类型
+	if err != nil || ws != c.WorkspaceID {                                                                  // 检查查询是否出错，或者查询到的workspace_id与请求中的workspace_id是否不匹配
+		errJSON(w, http.StatusNotFound, "session not found") // 如果出错或不匹配，返回404错误，提示session未找到
+		return                                               // 终止函数执行
 	}
-	// Check if session has an associated data source
+	// 检查会话是否关联了数据源
 	_ = a.DB.QueryRow(ctx, `
 		SELECT ds.id::text, ds.kind FROM data_sources ds
 		JOIN sessions s ON s.data_source_id = ds.id
@@ -310,25 +317,12 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 
 	a.Bus.Publish(sid, ssebus.Event{Type: "user_message", Data: map[string]string{"text": body.Text}})
 
-	low := strings.ToLower(body.Text)
-	if strings.Contains(low, "export") {
-		rid := uuid.NewString()
-		_, _ = a.DB.Exec(ctx, `INSERT INTO runs (id, session_id, status, pending_reason) VALUES ($1::uuid, $2::uuid, 'awaiting_approval', $3)`,
-			rid, sid, "export_requested")
-		_, _ = a.DB.Exec(ctx, `INSERT INTO approval_tasks (workspace_id, run_id, action_type, status, payload)
-			VALUES ($1::uuid, $2::uuid, 'export', 'pending', $3::jsonb)`,
-			c.WorkspaceID, rid, `{"reason":"export keyword"}`)
-		a.Bus.Publish(sid, ssebus.Event{Type: "approval_required", Data: map[string]string{"run_id": rid}})
-		JSON(w, http.StatusAccepted, map[string]any{"run_id": rid, "status": "awaiting_approval"})
-		return
-	}
-
-	// Resolve schema JSON for NL2SQL context
+	// 解析 schema JSON 以供 NL2SQL 上下文使用
 	sourceKey := "hub"
 	var discoverPool *pgxpool.Pool = a.DB
 	if dsID != nil {
 		sourceKey = *dsID
-		// Fetch data source credentials
+		// 获取数据源凭证
 		var host, db, user, pwd, ssl string
 		var port int
 		err := a.DB.QueryRow(ctx, `SELECT host, port, database, username, password, sslmode FROM data_sources WHERE id = $1::uuid`, *dsID).Scan(&host, &port, &db, &user, &pwd, &ssl)
@@ -369,8 +363,9 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 		workflow = "auto"
 	}
 
-	isComplex := strings.Contains(low, "分析") || strings.Contains(low, "报告") ||
-		strings.Contains(low, "analyze") || strings.Contains(low, "report")
+	textLow := strings.ToLower(body.Text)
+	isComplex := strings.Contains(textLow, "分析") || strings.Contains(textLow, "报告") ||
+		strings.Contains(textLow, "analyze") || strings.Contains(textLow, "report")
 	useAgentPipeline := (workflow == "agent_pipeline") || (workflow == "auto" && isComplex)
 
 	if useAgentPipeline {
@@ -405,7 +400,7 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 			errJSON(w, http.StatusBadRequest, genErr.Message)
 			return
 		}
-		// SQL execution error — result contains the SQL for debugging
+		// SQL 执行错误 — result 中保留了生成的 SQL 供调试
 		a.finishRunFailed(ctx, rid, sid, err.Error(), codes.InvalidArgument)
 		errJSON(w, http.StatusBadRequest, err.Error())
 		return
@@ -440,7 +435,7 @@ func (a *App) finishRunFailed(ctx context.Context, runID, sessionID, msg string,
 	a.Bus.Publish(sessionID, ssebus.Event{Type: "error", Data: map[string]string{"message": msg}})
 }
 
-// SSE streams run events for a session (MVP in-memory bus).
+// SessionStream 为会话提供 SSE 事件流（MVP 内存总线）
 func (a *App) SessionStream(w http.ResponseWriter, r *http.Request) {
 	sid := chi.URLParam(r, "sessionID")
 	c := middleware.ClaimsFromContext(r.Context())
@@ -465,7 +460,7 @@ func (a *App) SessionStream(w http.ResponseWriter, r *http.Request) {
 	}
 	enc := json.NewEncoder(w)
 
-	// Log drop count on stream end for observability
+	// 流结束时记录丢弃计数以供可观测性
 	defer func() {
 		if d := a.Bus.TotalDrops(); d > 0 {
 			a.Log.Warn("sse stream ended with drops",
@@ -492,97 +487,11 @@ func (a *App) SessionStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *App) ListApprovals(w http.ResponseWriter, r *http.Request) {
-	c := middleware.ClaimsFromContext(r.Context())
-	_, _ = a.DB.Exec(r.Context(), `
-		UPDATE approval_tasks SET status = 'expired', decided_at = now()
-		WHERE workspace_id = $1::uuid AND status = 'pending'
-		  AND created_at + ($2 * interval '1 second') < now()`,
-		c.WorkspaceID, int64(a.Cfg.ApprovalTTL.Seconds()))
-	rows, err := a.DB.Query(r.Context(), `
-		SELECT a.id::text, a.status, a.action_type, a.created_at::text, a.run_id::text
-		FROM approval_tasks a
-		WHERE a.workspace_id = $1::uuid AND a.status = 'pending'
-		ORDER BY a.created_at ASC`, c.WorkspaceID)
-	if err != nil {
-		errJSON(w, http.StatusInternalServerError, "db")
-		return
-	}
-	defer rows.Close()
-	var items []map[string]any
-	for rows.Next() {
-		var id, st, act, created, runID string
-		_ = rows.Scan(&id, &st, &act, &created, &runID)
-		items = append(items, map[string]any{"id": id, "status": st, "action_type": act, "created_at": created, "run_id": runID})
-	}
-	JSON(w, http.StatusOK, map[string]any{"items": items})
-}
 
-func (a *App) DecideApproval(w http.ResponseWriter, r *http.Request) {
-	c := middleware.ClaimsFromContext(r.Context())
-	id := chi.URLParam(r, "id")
-	var body struct {
-		Decision string `json:"decision"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		errJSON(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	dec := strings.ToLower(strings.TrimSpace(body.Decision))
-	if dec != "approve" && dec != "reject" {
-		errJSON(w, http.StatusBadRequest, "decision must be approve or reject")
-		return
-	}
-	var ws, runID string
-	err := a.DB.QueryRow(r.Context(), `SELECT workspace_id::text, run_id::text FROM approval_tasks WHERE id = $1::uuid`, id).Scan(&ws, &runID)
-	if err != nil || ws != c.WorkspaceID {
-		errJSON(w, http.StatusNotFound, "not found")
-		return
-	}
-	st := "approved"
-	runSt := "completed"
-	if dec == "reject" {
-		st = "rejected"
-		runSt = "cancelled"
-	}
-	var decided *string
-	if _, perr := uuid.Parse(c.UserID); perr == nil {
-		s := c.UserID
-		decided = &s
-	}
-	_, err = a.DB.Exec(r.Context(), `
-		UPDATE approval_tasks SET status = $2, decided_at = now(), decided_by = $3::uuid WHERE id = $1::uuid AND status = 'pending'`,
-		id, st, decided)
-	if err != nil {
-		errJSON(w, http.StatusInternalServerError, "db")
-		return
-	}
-	_, _ = a.DB.Exec(r.Context(), `UPDATE runs SET status = $2, updated_at = now() WHERE id = $1::uuid`, runID, runSt)
-	var sid string
-	_ = a.DB.QueryRow(r.Context(), `SELECT session_id::text FROM runs WHERE id = $1::uuid`, runID).Scan(&sid)
-	a.Bus.Publish(sid, ssebus.Event{Type: "approval_" + st, Data: map[string]string{"approval_id": id}})
-
-	auditPayload, _ := json.Marshal(map[string]string{"approval_id": id, "decision": dec, "run_id": runID})
-	if aid, perr := uuid.Parse(c.UserID); perr == nil {
-		_, _ = a.DB.Exec(r.Context(), `
-			INSERT INTO audit_events (workspace_id, actor_user_id, action, payload)
-			VALUES ($1::uuid, $2::uuid, 'approval_decided', $3::jsonb)`,
-			c.WorkspaceID, aid.String(), auditPayload)
-	} else {
-		_, _ = a.DB.Exec(r.Context(), `
-			INSERT INTO audit_events (workspace_id, actor_user_id, action, payload)
-			VALUES ($1::uuid, NULL, 'approval_decided', $2::jsonb)`,
-			c.WorkspaceID, auditPayload)
-	}
-
-	JSON(w, http.StatusOK, map[string]string{"status": st})
-}
-
-// InternalNL2SQL is called by the Python orchestrator's nl2sql_node to execute NL2SQL
-// via Go's secure boundary (gRPC → sqlrun). It receives user_message, schema_json, and trace_id,
-// calls the Python worker's GenerateSQL RPC, executes the returned SQL (read-only), and returns results.
-// InternalNL2SQL is called by the Python orchestrator's nl2sql_node.
-// Authentication is handled by InternalHMACAuth middleware.
+// InternalNL2SQL 由 Python 编排器的 nl2sql_node 调用，用于通过 Go 的安全边界（gRPC → sqlrun）执行 NL2SQL。
+// 它接收 user_message、schema_json 和 trace_id，调用 Python 工作节点的 GenerateSQL RPC，
+// 执行返回的 SQL（只读），并将结果返回。
+// 认证由 InternalHMACAuth 中间件处理。
 func (a *App) InternalNL2SQL(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		TraceID     string `json:"trace_id"`
@@ -633,7 +542,7 @@ func (a *App) InternalNL2SQL(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Routes builds the chi router.
+// Routes 构建 chi 路由器
 func Routes(a *App) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.Recoverer)
@@ -657,9 +566,6 @@ func Routes(a *App) http.Handler {
 		r.Get("/data-sources", a.ListDataSources)
 		r.With(middleware.RequireMinRole("operator")).Post("/data-sources", a.CreateDataSource)
 		r.With(middleware.RequireMinRole("operator")).Post("/data-sources/{id}/test", a.TestDataSource)
-		r.With(middleware.RequireMinRole("operator")).Get("/approvals", a.ListApprovals)
-		r.With(middleware.RequireMinRole("operator")).Post("/approvals/{id}/decide", a.DecideApproval)
-
 		r.With(middleware.RequireMinRole("operator")).Get("/workspaces/{workspaceID}/knowledge/docs", a.ListKnowledgeDocs)
 		r.With(middleware.RequireMinRole("operator")).Post("/workspaces/{workspaceID}/knowledge/docs", a.UploadKnowledgeDoc)
 

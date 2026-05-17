@@ -11,7 +11,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// TaskStatus returns the current status and result of an async task
+// TaskStatus 返回异步任务的当前状态和结果
 func (a *App) TaskStatus(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
 	taskID := chi.URLParam(r, "taskID")
@@ -49,8 +49,7 @@ func (a *App) TaskStatus(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, res)
 }
 
-// TaskCallback is an internal endpoint for workers to report task results.
-// Authentication is handled by InternalHMACAuth middleware.
+// TaskCallback 是供工作节点报告任务结果的内部端点。认证由 InternalHMACAuth 中间件处理。
 func (a *App) TaskCallback(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskID")
 
@@ -84,7 +83,7 @@ func (a *App) TaskCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update run status if run_id is attached to task
+	// 如果任务关联了 run_id，则更新运行状态
 	var runID *string
 	_ = a.DB.QueryRow(r.Context(), `SELECT run_id::text FROM async_tasks WHERE id = $1::uuid`, taskID).Scan(&runID)
 
@@ -112,8 +111,7 @@ func (a *App) TaskCallback(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
 
-// RunStepCallback is an internal endpoint to track LangGraph steps.
-// Authentication is handled by InternalHMACAuth middleware.
+// RunStepCallback 是用于追踪 LangGraph 步骤的内部端点。认证由 InternalHMACAuth 中间件处理。
 func (a *App) RunStepCallback(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "runID")
 	var body struct {
@@ -128,7 +126,7 @@ func (a *App) RunStepCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get step index
+	// 获取步骤序号
 	var stepIndex int
 	_ = a.DB.QueryRow(r.Context(), `SELECT COALESCE(MAX(step_index), -1) + 1 FROM agent_run_steps WHERE run_id = $1::uuid`, runID).Scan(&stepIndex)
 
@@ -141,7 +139,7 @@ func (a *App) RunStepCallback(w http.ResponseWriter, r *http.Request) {
 		a.Log.Error("insert run step", zap.Error(err))
 	}
 
-	// Push SSE
+	// 推送 SSE 事件
 	var sid string
 	if err := a.DB.QueryRow(r.Context(), `SELECT session_id::text FROM runs WHERE id = $1::uuid`, runID).Scan(&sid); err == nil {
 		eventData := map[string]string{

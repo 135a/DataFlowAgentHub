@@ -20,7 +20,7 @@ tracer = trace.get_tracer(__name__)
 
 
 def nl2sql_node(state: AgentState) -> dict:
-    """Execute NL2SQL by calling Go API's /internal/nl2sql endpoint."""
+    """通过调用 Go API 的 /internal/nl2sql 端点执行 NL2SQL。"""
     with tracer.start_as_current_span("nl2sql_node"):
         run_id = state.get("run_id", "")
         report_run_step(run_id, "nl2sql_agent", "running", "Calling NL2SQL via Go API")
@@ -67,18 +67,18 @@ def nl2sql_node(state: AgentState) -> dict:
 
 
 def route_next(state: AgentState) -> Literal["analysis_node", "chart_node", "report_node", "__end__"]:
-    """Route to next node based on user input keywords and workflow parameter."""
+    """根据用户输入关键词和工作流参数路由到下一个节点。"""
     user_input = state.get("user_input", "").lower()
     workflow = state.get("workflow", "auto")
 
-    # Explicit workflow parameter takes priority
+    # 显式工作流参数优先
     if workflow == "simple":
         return "__end__"
 
     if workflow == "agent_pipeline":
         return "analysis_node"
 
-    # Auto: keyword-based routing (supports both Chinese and English)
+    # 自动：基于关键词的路由（支持中文和英文）
     chart_kw = ("chart", "图表", "可视化", "chart", "plot", "graph")
     analyze_kw = ("分析", "analyze", "trend", "趋势", "对比", "compare")
     report_kw = ("报告", "report", "export", "导出", "简报")
@@ -90,12 +90,12 @@ def route_next(state: AgentState) -> Literal["analysis_node", "chart_node", "rep
     elif any(kw in user_input for kw in report_kw):
         return "report_node"
 
-    # Default: end after nl2sql (no further agents needed)
+    # 默认：在 NL2SQL 后结束（无需更多 agent）
     return "__end__"
 
 
 def route_after_analysis(state: AgentState) -> Literal["chart_node", "report_node"]:
-    """After analysis: route to chart_node if agent_pipeline, else straight to report."""
+    """分析后：如果是 agent_pipeline 则路由到 chart_node，否则直接到 report。"""
     workflow = state.get("workflow", "auto")
     if workflow == "agent_pipeline":
         return "chart_node"
@@ -103,7 +103,7 @@ def route_after_analysis(state: AgentState) -> Literal["chart_node", "report_nod
 
 
 def route_after_chart(state: AgentState) -> Literal["report_node", "__end__"]:
-    """After chart: route to report_node if not in report-only mode."""
+    """图表后：如果不是仅报告模式，则路由到 report_node。"""
     workflow = state.get("workflow", "auto")
     if workflow == "agent_pipeline":
         return "report_node"
@@ -131,5 +131,5 @@ def build_graph():
     return graph
 
 
-# Global graph instance
+# 全局图实例
 workflow_graph = build_graph()

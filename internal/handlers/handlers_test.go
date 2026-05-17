@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// testDBURL reads the test database URL from env or uses the docker-compose default.
+// testDBURL 从环境变量读取测试数据库 URL，或使用 docker-compose 默认值
 func testDBURL() string {
 	if u := os.Getenv("HUB_TEST_DATABASE_URL"); u != "" {
 		return u
@@ -30,7 +30,7 @@ func testDBURL() string {
 	return "postgres://hub:hub@localhost:5432/hub?sslmode=disable"
 }
 
-// setupTestDB connects to the test database or skips the test.
+// setupTestDB 连接到测试数据库，否则跳过测试
 func setupTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -47,7 +47,7 @@ func setupTestDB(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// setupTestApp creates a minimal App for integration testing.
+// setupTestApp 创建用于集成测试的最小化 App
 func setupTestApp(t *testing.T, pool *pgxpool.Pool, nl2sqlExec *nl2sqlexec.Executor) *App {
 	t.Helper()
 	cfg := &config.Config{
@@ -78,12 +78,12 @@ func setupTestApp(t *testing.T, pool *pgxpool.Pool, nl2sqlExec *nl2sqlexec.Execu
 	}
 }
 
-// newTestServer creates an httptest.Server with the chi router.
+// newTestServer 创建带有 chi 路由器的 httptest.Server
 func newTestServer(app *App) *httptest.Server {
 	return httptest.NewServer(Routes(app))
 }
 
-// TestHealthEndpoint verifies the /health endpoint returns 200 and ok status.
+// TestHealthEndpoint 验证 /health 端点返回 200 和 ok 状态
 func TestHealthEndpoint(t *testing.T) {
 	pool := setupTestDB(t)
 	app := setupTestApp(t, pool, nil)
@@ -107,14 +107,14 @@ func TestHealthEndpoint(t *testing.T) {
 	if body["postgres"] != "ok" {
 		t.Errorf("expected postgres=ok, got postgres=%s", body["postgres"])
 	}
-	// Redis is nil in test setup, so it reports "down" or may panic
-	// Accept either "ok" or "down" since we don't mock Redis
+	// Redis 在测试设置中为 nil，因此它会报告 "down"
+	// 由于我们没有模拟 Redis，接受 "ok" 或 "down"
 	if body["redis"] != "ok" && body["redis"] != "down" {
 		t.Errorf("expected redis=ok or redis=down, got redis=%s", body["redis"])
 	}
 }
 
-// TestLoginSuccess verifies login with correct credentials returns a JWT.
+// TestLoginSuccess 验证使用正确凭据登录返回 JWT
 func TestLoginSuccess(t *testing.T) {
 	pool := setupTestDB(t)
 	app := setupTestApp(t, pool, nil)
@@ -147,7 +147,7 @@ func TestLoginSuccess(t *testing.T) {
 	}
 }
 
-// TestLoginInvalidCredentials verifies login with wrong password returns 401.
+// TestLoginInvalidCredentials 验证使用错误密码登录返回 401
 func TestLoginInvalidCredentials(t *testing.T) {
 	pool := setupTestDB(t)
 	app := setupTestApp(t, pool, nil)
@@ -174,7 +174,7 @@ func TestLoginInvalidCredentials(t *testing.T) {
 	}
 }
 
-// TestVersionEndpoint verifies the /version endpoint returns the version.
+// TestVersionEndpoint 验证 /version 端点返回版本号
 func TestVersionEndpoint(t *testing.T) {
 	pool := setupTestDB(t)
 	app := setupTestApp(t, pool, nil)
@@ -200,9 +200,9 @@ func TestVersionEndpoint(t *testing.T) {
 	}
 }
 
-// --- helper functions for PostMessage tests ---
+// --- PostMessage 测试的辅助函数 ---
 
-// testJWT generates a valid JWT for integration testing.
+// testJWT 生成用于集成测试的有效 JWT
 func testJWT(t *testing.T, secret []byte) string {
 	t.Helper()
 	tok, err := auth.Sign(secret, seed.ServiceAPIUserID, seed.DemoWorkspaceID(), "admin", 1*time.Hour)
@@ -212,7 +212,7 @@ func testJWT(t *testing.T, secret []byte) string {
 	return tok
 }
 
-// createTestSession creates a session in the test database and returns its ID.
+// createTestSession 在测试数据库中创建会话并返回其 ID
 func createTestSession(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -229,7 +229,7 @@ func createTestSession(t *testing.T, pool *pgxpool.Pool) string {
 	return id
 }
 
-// TestHealthEndpointUnhealthy verifies /health returns 503 when Postgres is down.
+// TestHealthEndpointUnhealthy 验证 Postgres 宕机时 /health 返回 503
 func TestHealthEndpointUnhealthy(t *testing.T) {
 	pool := setupTestDB(t)
 	pool.Close() // simulate database down
@@ -256,7 +256,7 @@ func TestHealthEndpointUnhealthy(t *testing.T) {
 	}
 }
 
-// TestPostMessageSessionNotFound verifies PostMessage returns 404 for a non-existent session.
+// TestPostMessageSessionNotFound 验证 PostMessage 对不存在的会话返回 404
 func TestPostMessageSessionNotFound(t *testing.T) {
 	pool := setupTestDB(t)
 	app := setupTestApp(t, pool, nil)
@@ -265,8 +265,8 @@ func TestPostMessageSessionNotFound(t *testing.T) {
 
 	tok := testJWT(t, app.Cfg.JWTSecret)
 	nonexistentID := "00000000-0000-4000-8000-000000000099"
-	// Ensure the session doesn't exist in this test
-	// Use a random UUID to guarantee not found
+	// 确保此测试中会话不存在
+	// 使用随机 UUID 保证找不到
 	body := `{"text":"show tables"}`
 	req, _ := http.NewRequest(http.MethodPost,
 		srv.URL+"/v1/sessions/"+nonexistentID+"/messages",
@@ -286,7 +286,7 @@ func TestPostMessageSessionNotFound(t *testing.T) {
 	}
 }
 
-// TestPostMessageEmptyText verifies PostMessage returns 400 when text is empty.
+// TestPostMessageEmptyText 验证 PostMessage 在文本为空时返回 400
 func TestPostMessageEmptyText(t *testing.T) {
 	pool := setupTestDB(t)
 	sid := createTestSession(t, pool)

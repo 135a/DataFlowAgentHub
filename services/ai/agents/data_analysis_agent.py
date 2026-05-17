@@ -45,7 +45,7 @@ def data_analysis_node(state: AgentState) -> dict:
         
     raw_stats = "\n\n".join(summary_parts)
     
-    # 4.3 Call LLM to generate human-readable business summary
+    # 调用 LLM 生成可读的业务摘要
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         return {"analysis_summary": raw_stats + "\n(LLM analysis skipped: missing API key)"}

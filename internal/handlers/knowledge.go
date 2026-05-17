@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// ListKnowledgeDocs lists the documents in the workspace
+// ListKnowledgeDocs 列出工作区中的知识文档
 func (a *App) ListKnowledgeDocs(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
 	wsID := chi.URLParam(r, "workspaceID")
@@ -54,7 +54,7 @@ func (a *App) ListKnowledgeDocs(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]any{"docs": docs})
 }
 
-// UploadKnowledgeDoc receives text/markdown and enqueues it for chroma indexing.
+// UploadKnowledgeDoc 接收文本/标记内容并将其加入队列进行 Chroma 索引
 func (a *App) UploadKnowledgeDoc(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
 	wsID := chi.URLParam(r, "workspaceID")
@@ -77,7 +77,7 @@ func (a *App) UploadKnowledgeDoc(w http.ResponseWriter, r *http.Request) {
 
 	docID := uuid.NewString()
 
-	// 1. Insert into DB
+	// 1. 插入数据库
 	_, err := a.DB.Exec(r.Context(), `
 		INSERT INTO knowledge_docs (id, workspace_id, title, content_hash, created_by, status)
 		VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid, 'pending')`,
@@ -88,7 +88,7 @@ func (a *App) UploadKnowledgeDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Enqueue async task via async.Client (writes to DB + publishes to NATS)
+	// 2. 通过 async.Client 加入异步任务队列（写入数据库并发布到 NATS）
 	taskID, err := a.AsyncTask.EnqueueTask(r.Context(), wsID, "", "", "knowledge_index", map[string]any{
 		"action":   "index_document",
 		"doc_id":   docID,
@@ -105,8 +105,7 @@ func (a *App) UploadKnowledgeDoc(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusAccepted, map[string]any{"id": docID, "task_id": taskID, "status": "pending"})
 }
 
-// KnowledgeDocCallback is an internal endpoint for the Python worker to update document indexing status.
-// Authentication is handled by InternalHMACAuth middleware.
+// KnowledgeDocCallback 是供 Python 工作节点更新文档索引状态的内部端点。认证由 InternalHMACAuth 中间件处理。
 func (a *App) KnowledgeDocCallback(w http.ResponseWriter, r *http.Request) {
 	docID := chi.URLParam(r, "docID")
 	var body struct {

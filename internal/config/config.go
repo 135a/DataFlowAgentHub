@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Config holds process configuration loaded from environment variables.
+// Config 存储从环境变量加载的进程配置。
 type Config struct {
 	HTTPAddr                 string
 	DatabaseURL              string
@@ -67,7 +67,7 @@ func mustInt32(key string, def int32) int32 {
 	return int32(n)
 }
 
-// Load reads configuration from the environment.
+// Load 从环境变量读取配置。
 func Load() (*Config, error) {
 	sec := os.Getenv("HUB_JWT_SECRET")
 	if sec == "" {

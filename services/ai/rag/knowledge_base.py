@@ -11,7 +11,7 @@ class KnowledgeBase:
     def __init__(self, workspace_id: str):
         self.workspace_id = workspace_id
         
-        # Connect to Chroma host
+        # 连接到 Chroma 主机
         chroma_host = os.environ.get("CHROMA_HOST", "localhost")
         chroma_port = os.environ.get("CHROMA_PORT", "8000")
         
@@ -23,7 +23,7 @@ class KnowledgeBase:
             settings=Settings(allow_reset=allow_reset)
         )
         
-        # We use a collection per workspace for data isolation
+        # 每个工作区使用独立的集合以实现数据隔离
         collection_name = f"workspace_{workspace_id.replace('-', '_')}"
         
         api_key = os.environ.get("OPENAI_API_KEY")
@@ -37,7 +37,7 @@ class KnowledgeBase:
             model="text-embedding-3-small"
         )
         
-        # Custom embedding function wrapper for chromadb
+        # 自定义 chromadb 嵌入函数包装器
         class LangchainEmbeddingFunc:
             def __init__(self, embs):
                 self.embs = embs
@@ -56,7 +56,7 @@ class KnowledgeBase:
         )
 
     def add_document(self, doc_id: str, title: str, text_content: str):
-        """Chunk document and add to Chroma collection"""
+        """将文档分块并添加到 Chroma 集合"""
         chunks = self.text_splitter.split_text(text_content)
         if not chunks:
             return 0
@@ -64,7 +64,7 @@ class KnowledgeBase:
         ids = [f"{doc_id}_chunk_{i}" for i in range(len(chunks))]
         metadatas = [{"doc_id": doc_id, "title": title, "chunk_index": i} for i in range(len(chunks))]
         
-        # Add to chroma
+        # 添加到 Chroma
         self.collection.add(
             documents=chunks,
             metadatas=metadatas,
@@ -73,8 +73,8 @@ class KnowledgeBase:
         return len(chunks)
         
     def search(self, query: str, top_k: int = 3) -> list:
-        """Search the collection for relevant snippets"""
-        # If no documents exist in collection, it returns empty
+        """在集合中搜索相关片段"""
+        # 如果集合中没有文档，返回空列表
         if self.collection.count() == 0:
             return []
             

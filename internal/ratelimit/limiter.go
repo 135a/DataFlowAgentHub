@@ -8,8 +8,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Allow checks a sliding-window counter in Redis using a sorted set.
-// If Redis fails, allows traffic (fail-open for MVP).
+// Allow 使用 Redis 中的有序集合检查滑动窗口计数器。如果 Redis 故障则放行流量（MVP 阶段 fail-open）。
 func Allow(ctx context.Context, rdb *redis.Client, key string, limit int64, window time.Duration) (bool, error) {
 	if rdb == nil {
 		return true, nil
@@ -21,13 +20,13 @@ func Allow(ctx context.Context, rdb *redis.Client, key string, limit int64, wind
 	member := fmt.Sprintf("%d-%d", now, now%1000) // unique-ish member
 
 	pipe := rdb.Pipeline()
-	// Add current request timestamp
+	// 添加当前请求时间戳
 	pipe.ZAdd(ctx, k, redis.Z{Score: float64(now), Member: member})
-	// Remove entries outside the window
+	// 移除窗口外的条目
 	pipe.ZRemRangeByScore(ctx, k, "0", fmt.Sprintf("%d", edge))
-	// Count remaining entries in window
+	// 统计窗口内剩余条目数
 	countCmd := pipe.ZCard(ctx, k)
-	// Set TTL on the key for automatic cleanup
+	// 设置过期时间以自动清理
 	pipe.Expire(ctx, k, window*2)
 
 	_, err := pipe.Exec(ctx)

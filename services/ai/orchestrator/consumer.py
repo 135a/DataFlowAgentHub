@@ -25,7 +25,7 @@ async def process_message(msg):
 
         logger.info(f"Processing task {task_id} (run_id: {run_id})")
 
-        # Build initial state
+        # 构建初始状态
         initial_state = {
             "run_id": run_id,
             "user_input": payload.get("user_message", ""),
@@ -33,7 +33,7 @@ async def process_message(msg):
         }
         config = {"configurable": {"thread_id": session_id or task_id}}
 
-        # Run graph synchronously inside async wrapper for MVP
+        # 在异步包装器内同步运行图（MVP 阶段）
         result = await asyncio.to_thread(workflow_graph.invoke, initial_state, config)
 
         callback_payload = {
@@ -89,10 +89,10 @@ async def run_consumer():
         await nc.connect(nats_url)
         logger.info(f"Connected to NATS at {nats_url}")
         
-        # Subscribe to agent pipeline topic
+        # 订阅 agent 管道主题
         await nc.subscribe("hub.tasks.agent_pipeline", cb=process_message)
         
-        # Keep running
+        # 保持运行
         while True:
             await asyncio.sleep(1)
             

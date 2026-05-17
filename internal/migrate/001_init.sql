@@ -50,22 +50,10 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE TABLE IF NOT EXISTS runs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    status TEXT NOT NULL CHECK (status IN ('running', 'awaiting_approval', 'completed', 'failed', 'cancelled')),
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'cancelled')),
     pending_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS approval_tasks (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    action_type TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired')),
-    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    decided_at TIMESTAMPTZ,
-    decided_by UUID REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS audit_events (
@@ -79,7 +67,6 @@ CREATE TABLE IF NOT EXISTS audit_events (
 
 CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id);
-CREATE INDEX IF NOT EXISTS idx_approval_workspace_status ON approval_tasks(workspace_id, status);
 
 INSERT INTO workspaces (id, name)
 VALUES ('00000000-0000-4000-8000-000000000001', 'demo')

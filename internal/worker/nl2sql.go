@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// NL2SQLClient wraps the gRPC NL2SQL worker client.
+// NL2SQLClient 封装了 gRPC NL2SQL 工作节点客户端
 type NL2SQLClient struct {
 	c nlv1.NL2SQLServiceClient
 }
@@ -24,7 +24,7 @@ func DialNL2SQL(addr string) (*grpc.ClientConn, *NL2SQLClient, error) {
 	return conn, &NL2SQLClient{c: nlv1.NewNL2SQLServiceClient(conn)}, nil
 }
 
-// injectTraceContext propagates W3C trace context into outgoing gRPC metadata.
+// injectTraceContext 将 W3C 追踪上下文传播到出站 gRPC 元数据中
 func injectTraceContext(ctx context.Context) context.Context {
 	md, ok := metadata.FromOutgoingContext(ctx)
 	if !ok {
@@ -64,7 +64,7 @@ func (w *NL2SQLClient) Health(ctx context.Context) (*nlv1.HealthResponse, error)
 	return w.c.Health(ctx, &nlv1.HealthRequest{})
 }
 
-// metadataCarrier adapts metadata.MD to the propagation.TextMapCarrier interface.
+// metadataCarrier 适配 metadata.MD 到 propagation.TextMapCarrier 接口
 var _ propagation.TextMapCarrier = (*metadataCarrier)(nil)
 
 type metadataCarrier struct {

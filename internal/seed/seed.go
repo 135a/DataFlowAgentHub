@@ -12,7 +12,7 @@ import (
 
 const demoWorkspaceID = "00000000-0000-4000-8000-000000000001"
 
-// EnsureAdminUser creates the seed admin user if missing.
+// EnsureAdminUser 在缺少种子管理员用户时创建之
 func EnsureAdminUser(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config) error {
 	var count int
 	err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE workspace_id = $1 AND email = $2`, demoWorkspaceID, cfg.SeedEmail).Scan(&count)
@@ -40,12 +40,12 @@ func EnsureAdminUser(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config
 	return nil
 }
 
-// DemoWorkspaceID returns the fixed demo workspace UUID string.
+// DemoWorkspaceID 返回固定的演示工作区 UUID 字符串
 func DemoWorkspaceID() string { return demoWorkspaceID }
 
 const ServiceAPIUserID = "00000000-0000-4000-8000-000000000099"
 
-// EnsureServiceAPIUser inserts a dedicated admin row for X-Hub-Api-Key auth (not password-loginable).
+// EnsureServiceAPIUser 为 X-Hub-Api-Key 认证插入专用的 admin 行（不可密码登录）
 func EnsureServiceAPIUser(ctx context.Context, pool *pgxpool.Pool) error {
 	hash, err := bcrypt.GenerateFromPassword([]byte("no-login-"+demoWorkspaceID), bcrypt.DefaultCost)
 	if err != nil {
@@ -60,7 +60,7 @@ func EnsureServiceAPIUser(ctx context.Context, pool *pgxpool.Pool) error {
 	return err
 }
 
-// GetUserID loads user id by email in demo workspace.
+// GetUserID 在演示工作区中通过邮箱加载用户 ID
 func GetUserID(ctx context.Context, pool *pgxpool.Pool, email string) (string, error) {
 	var id string
 	err := pool.QueryRow(ctx, `SELECT id::text FROM users WHERE workspace_id = $1 AND email = $2`, demoWorkspaceID, email).Scan(&id)

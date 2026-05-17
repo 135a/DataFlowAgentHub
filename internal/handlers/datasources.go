@@ -27,7 +27,7 @@ type createDSBody struct {
 	SSLMode  string `json:"sslmode"`
 }
 
-// ListDataSources returns configured sources without password values.
+// ListDataSources 返回已配置的数据源（不包含密码值）
 func (a *App) ListDataSources(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
 	rows, err := a.DB.Query(r.Context(), `
@@ -59,7 +59,7 @@ func (a *App) ListDataSources(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-// CreateDataSource stores credentials server-side only (never returned on GET).
+// CreateDataSource 在服务端存储凭据（GET 请求不会返回密码）
 func (a *App) CreateDataSource(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
 	var body createDSBody
@@ -99,7 +99,7 @@ func (a *App) CreateDataSource(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusCreated, map[string]any{"id": id, "name": body.Name, "has_password": body.Password != ""})
 }
 
-// TestDataSource pings the stored postgres data source.
+// TestDataSource 对已存储的 postgres 数据源执行 ping 测试
 func (a *App) TestDataSource(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
 	id := chi.URLParam(r, "id")

@@ -13,10 +13,9 @@ import (
 //go:embed *.sql
 var fs embed.FS
 
-// Up applies embedded SQL migrations in lexical order, tracking applied
-// versions in a schema_migrations table to avoid re-executing old migrations.
+// Up 按字典序应用嵌入的 SQL 迁移文件，通过 schema_migrations 表追踪已应用的版本以避免重复执行旧的迁移
 func Up(ctx context.Context, pool *pgxpool.Pool) error {
-	// Create tracking table if it doesn't exist
+	// 创建追踪表（如果不存在）
 	_, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version    TEXT PRIMARY KEY,
 		applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -25,7 +24,7 @@ func Up(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
-	// Load applied versions
+	// 加载已应用的版本
 	rows, err := pool.Query(ctx, `SELECT version FROM schema_migrations`)
 	if err != nil {
 		return fmt.Errorf("query schema_migrations: %w", err)
@@ -41,7 +40,7 @@ func Up(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	rows.Close()
 
-	// Read embedded SQL files
+	// 读取嵌入的 SQL 文件
 	entries, err := fs.ReadDir(".")
 	if err != nil {
 		return err

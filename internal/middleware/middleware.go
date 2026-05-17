@@ -49,8 +49,8 @@ func TraceFromContext(ctx context.Context) string {
 	return v
 }
 
-// Auth accepts either Bearer JWT or X-Hub-Api-Key matching global key (admin on demo workspace).
-// If rdb is non-nil, JWT revocation is checked.
+// Auth 接受 Bearer JWT 或与全局密钥匹配的 X-Hub-Api-Key（在演示工作区中为 admin 角色）。
+// 如果 rdb 不为空，则检查 JWT 吊销状态。
 func Auth(cfg *config.Config, log *zap.Logger, rdb *redis.Client) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +67,7 @@ func Auth(cfg *config.Config, log *zap.Logger, rdb *redis.Client) func(http.Hand
 				}
 			}
 
-			// Support Bearer token from Header or ?token= query parameter (for SSE EventSource)
+			// 支持从 Header 或 ?token= 查询参数获取 Bearer 令牌（用于 SSE EventSource）
 			raw := ""
 			h := r.Header.Get("Authorization")
 			if strings.HasPrefix(strings.ToLower(h), "bearer ") {
@@ -88,7 +88,7 @@ func Auth(cfg *config.Config, log *zap.Logger, rdb *redis.Client) func(http.Hand
 				return
 			}
 
-			// Check revocation list
+			// 检查吊销列表
 			if rdb != nil && c.ID != "" {
 				revoked, revErr := auth.IsRevoked(r.Context(), rdb, c.ID)
 				if revErr != nil {
@@ -105,15 +105,14 @@ func Auth(cfg *config.Config, log *zap.Logger, rdb *redis.Client) func(http.Hand
 	}
 }
 
-// ClaimsFromContext returns JWT claims if present.
+// ClaimsFromContext 返回上下文中的 JWT 声明（如果存在）
 func ClaimsFromContext(ctx context.Context) *auth.Claims {
 	c, _ := ctx.Value(ctxClaims).(*auth.Claims)
 	return c
 }
 
-// InternalHMACAuth validates HMAC-SHA256 signatures on internal endpoints.
-// The client must send a X-Hub-Signature: sha256=<hex> header where <hex> is
-// the HMAC-SHA256 of the request body computed with the shared secret.
+// InternalHMACAuth 验证内部端点的 HMAC-SHA256 签名。
+// 客户端必须发送 X-Hub-Signature: sha256=<hex> 头部，其中 <hex> 是使用共享密钥计算的请求体 HMAC-SHA256 值。
 func InternalHMACAuth(secret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +122,7 @@ func InternalHMACAuth(secret string) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Parse "sha256=<hex>"
+			// 解析 "sha256=<hex>" 格式
 			parts := strings.SplitN(sigHeader, "=", 2)
 			if len(parts) != 2 || parts[0] != "sha256" {
 				http.Error(w, `{"error":"invalid signature format"}`, http.StatusUnauthorized)
@@ -131,7 +130,7 @@ func InternalHMACAuth(secret string) func(http.Handler) http.Handler {
 			}
 			sigHex := parts[1]
 
-			// Read and buffer body
+			// 读取并缓存请求体
 			bodyBytes, err := io.ReadAll(r.Body)
 			r.Body.Close()
 			if err != nil {
@@ -139,7 +138,7 @@ func InternalHMACAuth(secret string) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Compute expected HMAC
+			// 计算期望的 HMAC 值
 			mac := hmac.New(sha256.New, []byte(secret))
 			mac.Write(bodyBytes)
 			expectedHex := hex.EncodeToString(mac.Sum(nil))
@@ -149,14 +148,14 @@ func InternalHMACAuth(secret string) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Restore body for downstream handlers
+			// 恢复请求体供下游处理器使用
 			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 			next.ServeHTTP(w, r)
 		})
 	}
 }
 
-// RequireMinRole returns 403 if role is weaker than required (admin > operator > viewer).
+// RequireMinRole 如果角色权限低于要求则返回 403（admin > operator > viewer）
 func RequireMinRole(min string) func(http.Handler) http.Handler {
 	order := map[string]int{"viewer": 1, "operator": 2, "admin": 3}
 	return func(next http.Handler) http.Handler {

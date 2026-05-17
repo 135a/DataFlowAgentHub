@@ -12,20 +12,19 @@ import (
 	"go.uber.org/zap"
 )
 
-// cacheKey builds a Redis key for schema caching.
+// cacheKey 构建用于 schema 缓存的 Redis 键
 func cacheKey(workspaceID, sourceKey string) string {
 	return fmt.Sprintf("schema:%s:%s", workspaceID, sourceKey)
 }
 
-// CachedSchema returns the discovered schema for the given data source.
-// It first checks Redis; on miss it calls DiscoverSchema, stores the result
-// in Redis with the configured TTL, and returns it.
+// CachedSchema 返回指定数据源的 schema 发现结果。
+// 它首先检查 Redis 缓存；未命中时调用 DiscoverSchema，将结果以配置的 TTL 存入 Redis 并返回。
 //
-// sourceKey: "hub" when using the platform database, or data_source_id for external sources.
+// sourceKey: 使用平台数据库时为 "hub"，外部数据源时为 data_source_id。
 func CachedSchema(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, cfg *config.Config, log *zap.Logger, workspaceID, sourceKey string) (*SchemaResult, error) {
 	key := cacheKey(workspaceID, sourceKey)
 
-	// 1. Try cache
+	// 1. 尝试缓存
 	cached, err := rdb.Get(ctx, key).Result()
 	if err == nil {
 		var sr SchemaResult
@@ -35,13 +34,13 @@ func CachedSchema(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, cf
 		log.Warn("schema cache unmarshal failed, re-discovering", zap.Error(err))
 	}
 
-	// 2. Discover from database
+	// 2. 从数据库发现
 	sr, err := DiscoverSchema(ctx, pool, cfg, log)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3. Store in cache
+	// 3. 存入缓存
 	jsonStr, err := sr.ToJSON()
 	if err != nil {
 		return sr, nil // still return result even if cache write fails

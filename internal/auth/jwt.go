@@ -31,8 +31,8 @@ func Sign(secret []byte, userID, workspaceID, role string, ttl time.Duration) (s
 	return t.SignedString(secret)
 }
 
-// SignSSEToken issues a short-lived token for SSE EventSource connections.
-// The token has minimal scope: it only allows subscribing to a specific session's events.
+// SignSSEToken 签发一个短期令牌用于 SSE EventSource 连接。
+// 该令牌作用域最小：仅允许订阅特定会话的事件。
 func SignSSEToken(secret []byte, userID, workspaceID, sessionID string) (string, error) {
 	now := time.Now()
 	c := Claims{
