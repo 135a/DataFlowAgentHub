@@ -260,7 +260,8 @@ func (a *App) CreateSession(w http.ResponseWriter, r *http.Request) {
 		Title          string `json:"title"`
 		DataSourceID   string `json:"data_source_id"`
 		DatasetID      string `json:"dataset_id"`
-		DatasetTableID string `json:"dataset_table_id"`
+		DatasetTableID string `json:"dataset_table_id"` // 保留向后兼容，不再使用
+		QuerySource    string `json:"query_source"`     // "knowledge" | "dataset"
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		a.Log.Warn("decode create session body", zap.Error(err))
@@ -269,6 +270,21 @@ func (a *App) CreateSession(w http.ResponseWriter, r *http.Request) {
 	if title == "" {
 		title = "New session"
 	}
+
+	// 推断 query_source：有 dataset_id 则是 dataset 模式，否则 knowledge
+	querySource := strings.TrimSpace(body.QuerySource)
+	if querySource == "" {
+		if body.DatasetID != "" {
+			querySource = "dataset"
+		} else {
+			querySource = "knowledge"
+		}
+	}
+	if querySource != "knowledge" && querySource != "dataset" {
+		errJSON(w, http.StatusBadRequest, "query_source must be 'knowledge' or 'dataset'")
+		return
+	}
+
 	// 如果提供了 data_source_id，验证其必须是属于此工作区的有效 UUID
 	var dsID *string
 	if ds := strings.TrimSpace(body.DataSourceID); ds != "" {
@@ -283,9 +299,14 @@ func (a *App) CreateSession(w http.ResponseWriter, r *http.Request) {
 		dsID = &ds
 	}
 
-	// 验证 dataset 和 table 关系
-	var dsIDPtr, dtIDPtr *string
-	if did := strings.TrimSpace(body.DatasetID); did != "" {
+	// 验证 dataset（dataset 模式下必填）
+	var dsIDPtr *string
+	if querySource == "dataset" {
+		did := strings.TrimSpace(body.DatasetID)
+		if did == "" {
+			errJSON(w, http.StatusBadRequest, "dataset_id is required when query_source is 'dataset'")
+			return
+		}
 		var exists int
 		if err := a.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM datasets WHERE id = $1::uuid AND status != 'deleted'`, did).Scan(&exists); err != nil || exists == 0 {
 			errJSON(w, http.StatusBadRequest, "dataset not found")
@@ -293,31 +314,19 @@ func (a *App) CreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 		dsIDPtr = &did
 	}
-	if tid := strings.TrimSpace(body.DatasetTableID); tid != "" {
-		if dsIDPtr == nil {
-			errJSON(w, http.StatusBadRequest, "dataset_table_id requires dataset_id")
-			return
-		}
-		var exists int
-		if err := a.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM dataset_tables WHERE id = $1::uuid AND dataset_id = $2::uuid AND status = 'active'`, tid, *dsIDPtr).Scan(&exists); err != nil || exists == 0 {
-			errJSON(w, http.StatusBadRequest, "table not found in dataset")
-			return
-		}
-		dtIDPtr = &tid
-	}
 
 	id := uuid.NewString()
 	var err error
 	if dsID != nil {
 		_, err = a.DB.Exec(r.Context(), `
-			INSERT INTO sessions (id, workspace_id, user_id, data_source_id, title, dataset_id, dataset_table_id)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::uuid, $7::uuid)`,
-			id, c.WorkspaceID, c.UserID, *dsID, title, dsIDPtr, dtIDPtr)
+			INSERT INTO sessions (id, workspace_id, user_id, data_source_id, title, dataset_id)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::uuid)`,
+			id, c.WorkspaceID, c.UserID, *dsID, title, dsIDPtr)
 	} else {
 		_, err = a.DB.Exec(r.Context(), `
-			INSERT INTO sessions (id, workspace_id, user_id, title, dataset_id, dataset_table_id)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::uuid, $6::uuid)`,
-			id, c.WorkspaceID, c.UserID, title, dsIDPtr, dtIDPtr)
+			INSERT INTO sessions (id, workspace_id, user_id, title, dataset_id)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::uuid)`,
+			id, c.WorkspaceID, c.UserID, title, dsIDPtr)
 	}
 	if err != nil {
 		a.Log.Error("create session", zap.Error(err))
@@ -356,9 +365,9 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 检查会话是否关联数据集
-	var datasetID, datasetTableID *string
+	var datasetID *string
 	if err := a.DB.QueryRow(ctx, `
-		SELECT dataset_id::text, dataset_table_id::text FROM sessions WHERE id = $1::uuid`, sid).Scan(&datasetID, &datasetTableID); err != nil {
+		SELECT dataset_id::text FROM sessions WHERE id = $1::uuid`, sid).Scan(&datasetID); err != nil {
 		// sessions 没有 dataset 关联，继续使用旧流程
 	}
 
@@ -384,13 +393,19 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 		"started_at": startTime.UTC().Format(time.RFC3339),
 	}})
 
-	// 如果会话关联了数据集表，走 MySQL 路径
-	if datasetID != nil && datasetTableID != nil && *datasetID != "" && *datasetTableID != "" {
-		a.postMessageToDataset(ctx, w, r, c, sid, rid, body, trace, startTime, *datasetID, *datasetTableID)
+	// 如果会话关联了数据集，走 MySQL 路径
+	if datasetID != nil && *datasetID != "" {
+		a.postMessageToDataset(ctx, w, r, c, sid, rid, body, trace, startTime, *datasetID)
 		return
 	}
 
-	// 旧流程：PostgreSQL / 外部数据源
+	// 知识库模式（无数据集关联）
+	if a.LlmClient != nil && a.LlmClient.APIKey != "" {
+		a.postMessageToKnowledge(ctx, w, r, c, sid, rid, body, trace, startTime)
+		return
+	}
+
+	// 旧流程：PostgreSQL / 外部数据源（向后兼容）
 	var dsID, dsKind *string
 	if err := a.DB.QueryRow(ctx, `
 		SELECT ds.id::text, ds.kind FROM data_sources ds
@@ -470,9 +485,9 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 func (a *App) postMessageToDataset(ctx context.Context, w http.ResponseWriter, r *http.Request, c *auth.Claims, sid, rid string, body struct {
 	Text     string `json:"text"`
 	Workflow string `json:"workflow"`
-}, trace string, startTime time.Time, datasetID, datasetTableID string) {
-	// 构建 schema 从 table_fields
-	schemaJSON, err := a.resolveDatasetSchema(ctx, datasetTableID)
+}, trace string, startTime time.Time, datasetID string) {
+	// 构建 schema 从 table_fields（返回数据集下所有表）
+	schemaJSON, err := a.resolveDatasetSchema(ctx, datasetID)
 	if err != nil {
 		a.finishRunFailed(ctx, rid, sid, "schema error: "+err.Error(), codes.Internal)
 		errJSON(w, http.StatusBadGateway, err.Error())
@@ -548,43 +563,107 @@ func (a *App) postMessageToDataset(ctx context.Context, w http.ResponseWriter, r
 	JSON(w, http.StatusOK, resp)
 }
 
-// resolveDatasetSchema 从 table_fields 构建数据集表的 schema JSON。
-func (a *App) resolveDatasetSchema(ctx context.Context, tableID string) (string, error) {
+// resolveDatasetSchema 从 table_fields 构建数据集下所有活跃表的 schema JSON。
+func (a *App) resolveDatasetSchema(ctx context.Context, datasetID string) (string, error) {
 	rows, err := a.DB.Query(ctx, `
 		SELECT dt.name, tf.name, tf.field_type, tf.is_nullable
 		FROM table_fields tf
 		JOIN dataset_tables dt ON dt.id = tf.table_id
-		WHERE tf.table_id = $1::uuid
-		ORDER BY tf.ordinal_position ASC`, tableID)
+		WHERE tf.table_id IN (
+			SELECT id FROM dataset_tables
+			WHERE dataset_id = $1::uuid AND status = 'active'
+		)
+		ORDER BY dt.name, tf.ordinal_position ASC`, datasetID)
 	if err != nil {
 		return "", fmt.Errorf("query dataset schema: %w", err)
 	}
 	defer rows.Close()
 
-	var tableName string
-	var columns []schema.ColumnSchema
+	type tableCols struct {
+		name    string
+		columns []schema.ColumnSchema
+	}
+	var tables []tableCols
+	var currentTable *tableCols
 	for rows.Next() {
-		var colName, colType string
+		var tblName, colName, colType string
 		var nullable bool
-		if err := rows.Scan(&tableName, &colName, &colType, &nullable); err != nil {
+		if err := rows.Scan(&tblName, &colName, &colType, &nullable); err != nil {
 			return "", fmt.Errorf("scan dataset schema: %w", err)
 		}
-		columns = append(columns, schema.ColumnSchema{
+		if currentTable == nil || currentTable.name != tblName {
+			if currentTable != nil {
+				tables = append(tables, *currentTable)
+			}
+			currentTable = &tableCols{name: tblName}
+		}
+		currentTable.columns = append(currentTable.columns, schema.ColumnSchema{
 			Name:     colName,
 			Type:     colType,
 			Nullable: nullable,
 		})
 	}
+	if currentTable != nil {
+		tables = append(tables, *currentTable)
+	}
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf("iterate dataset schema: %w", err)
 	}
 
-	sr := &schema.SchemaResult{
-		Tables: []schema.TableSchema{
-			{Name: tableName, Columns: columns},
-		},
+	var tableSchemas []schema.TableSchema
+	for _, t := range tables {
+		tableSchemas = append(tableSchemas, schema.TableSchema{Name: t.name, Columns: t.columns})
 	}
+	sr := &schema.SchemaResult{Tables: tableSchemas}
 	return sr.ToJSON()
+}
+
+// knowledgeQAResult 知识库问答结果
+type knowledgeQAResult struct {
+	Answer  string `json:"answer"`
+	Sources []struct {
+		Title   string `json:"title"`
+		Content string `json:"content"`
+	} `json:"sources"`
+}
+
+// postMessageToKnowledge 处理知识库问答（RAG + LLM）
+func (a *App) postMessageToKnowledge(ctx context.Context, w http.ResponseWriter, r *http.Request, c *auth.Claims, sid, rid string, body struct {
+	Text     string `json:"text"`
+	Workflow string `json:"workflow"`
+}, trace string, startTime time.Time) {
+	// TODO: 集成 ChromaDB 检索（当前为直接 LLM 问答）
+	prompt := fmt.Sprintf(`你是一个知识库问答助手。请基于你的知识回答以下问题。
+如果不知道答案，请如实说明，不要编造。
+
+问题：%s
+
+请用中文回答。`, body.Text)
+
+	llmCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	resp, err := a.LlmClient.ChatCompletion(llmCtx, a.Cfg.LLMModel, prompt)
+	if err != nil {
+		a.finishRunFailed(ctx, rid, sid, "knowledge query failed: "+err.Error(), codes.Internal)
+		errJSON(w, http.StatusBadGateway, "知识库查询失败: "+err.Error())
+		return
+	}
+
+	result := knowledgeQAResult{
+		Answer:  resp,
+		Sources: []struct {
+			Title   string `json:"title"`
+			Content string `json:"content"`
+		}{},
+	}
+
+	finalResp, err := a.publishSyncResult(ctx, rid, sid, result, startTime)
+	if err != nil {
+		a.finishRunFailed(ctx, rid, sid, "marshal error", codes.Internal)
+		errJSON(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	JSON(w, http.StatusOK, finalResp)
 }
 
 // resolveSchema 为会话解析数据库 schema，返回 JSON 字符串
@@ -850,12 +929,7 @@ func Routes(a *App) http.Handler {
 		r.Get("/tasks/{taskID}", a.TaskStatus)          // 获取任务状态
 
 		// 数据管理路由
-		r.With(middleware.RequireMinRole("normal_user")).Post("/data/upload", a.UploadData)                // 文件上传导入
-		r.Post("/data/suggest-table", a.SuggestTable)        // 已禁用
-		r.Post("/data/create-table", a.CreateTable)          // 已禁用
-
-		// Schema 路由
-		r.Get("/schema/tables", a.ListTables) // 获取表结构列表
+		r.With(middleware.RequireMinRole("normal_user")).Post("/data/upload", a.UploadData) // 文件上传导入
 
 		// ====== 数据集管理路由 ======
 		r.Get("/datasets", a.ListDatasets)                                                    // 列出数据集

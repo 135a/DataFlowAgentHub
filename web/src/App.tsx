@@ -5,6 +5,8 @@ import { useIsSuperAdmin, useIsDataAdmin, useIsNormalUser } from "./hooks/useRol
 import { useSSE } from "./hooks/useSSE";
 import { ModeSelector } from "./components/ModeSelector";
 import { ProgressPanel } from "./components/ProgressPanel";
+import { QuerySourceSelector } from "./components/QuerySourceSelector";
+import type { QuerySource } from "./components/QuerySourceSelector";
 import { DataManagementPanel } from "./components/DataManagementPanel";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { MessageBlock, RunStepsPanel } from "./components/ChatPanel";
@@ -17,8 +19,6 @@ import type {
   MessagesResponse,
   Dataset,
   DatasetsResponse,
-  DatasetTable,
-  DatasetTablesResponse,
 } from "./types/api";
 import styles from "./App.module.css";
 
@@ -97,11 +97,12 @@ export function App() {
   });
   const [sending, setSending] = useState(false);
 
-  // ---- dataset / table selector state ----
+  // ---- query source selector state ----
+  const [querySource, setQuerySource] = useState<QuerySource>(() => {
+    return (localStorage.getItem("querySource") as QuerySource) || "knowledge";
+  });
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState("");
-  const [datasetTables, setDatasetTables] = useState<DatasetTable[]>([]);
-  const [selectedTableId, setSelectedTableId] = useState("");
 
   // ---- progress tracking state ----
   const [isProcessing, setIsProcessing] = useState(false);
@@ -228,17 +229,13 @@ export function App() {
       .catch(() => {});
   }, [token]);
 
-  // ---- load tables when dataset changes ----
-  useEffect(() => {
-    if (!selectedDatasetId || !token) {
-      setDatasetTables([]);
-      setSelectedTableId("");
-      return;
+  function handleSourceChange(newSource: QuerySource) {
+    setQuerySource(newSource);
+    localStorage.setItem("querySource", newSource);
+    if (newSource === "knowledge") {
+      setSelectedDatasetId("");
     }
-    apiJson<DatasetTablesResponse>(`/v1/datasets/${selectedDatasetId}/tables`, { token })
-      .then(j => setDatasetTables(j.tables || []))
-      .catch(() => setDatasetTables([]));
-  }, [selectedDatasetId, token]);
+  }
 
   function handleModeChange(newMode: QueryMode) {
     setMode(newMode);
@@ -302,16 +299,20 @@ export function App() {
     setSendStatus("");
     setSending(true);
 
-    const steps = mode === "deep" ? DEEP_STEPS : QUICK_STEPS;
-    setCurrentSteps(steps);
-    const initialStates = makeWaitingStates(steps.length);
-    setStepStates(initialStates);
-    stepTimestampsRef.current = [];
-    const history = loadStepHistory();
-    const initialEstimate = calcInitialEstimate(steps, history);
-    setEstimatedRemainingMs(initialEstimate);
-    setIsProcessing(true);
-    startTimer();
+    // dataset 模式：使用 step 进度跟踪
+    // knowledge 模式：只显示 spinner，无进度面板
+    if (querySource === "dataset") {
+      const steps = mode === "deep" ? DEEP_STEPS : QUICK_STEPS;
+      setCurrentSteps(steps);
+      const initialStates = makeWaitingStates(steps.length);
+      setStepStates(initialStates);
+      stepTimestampsRef.current = [];
+      const history = loadStepHistory();
+      const initialEstimate = calcInitialEstimate(steps, history);
+      setEstimatedRemainingMs(initialEstimate);
+      setIsProcessing(true);
+      startTimer();
+    }
 
     const workflow = mode === "deep" ? "agent_pipeline" : "auto";
     try {
@@ -324,22 +325,31 @@ export function App() {
       if (r.status === 202) {
         startSSE(sid);
       } else if (r.ok) {
-        for (let i = 0; i < steps.length; i++) {
-          stepTimestampsRef.current[i] = Date.now() - sendStartRef.current;
+        if (querySource === "dataset") {
+          const steps = mode === "deep" ? DEEP_STEPS : QUICK_STEPS;
+          for (let i = 0; i < steps.length; i++) {
+            stepTimestampsRef.current[i] = Date.now() - sendStartRef.current;
+          }
+          setStepStates(prev => prev.map(st => ({ ...st, status: "completed" as const })));
         }
-        setStepStates(prev => prev.map(st => ({ ...st, status: "completed" as const })));
         setSending(false);
-        setTimeout(() => finishProcessing(), 500);
+        if (querySource === "dataset") {
+          setTimeout(() => finishProcessing(), 500);
+        }
         await loadMessages();
       } else {
         setSendStatus(`${r.status}`);
         setSending(false);
-        setTimeout(() => finishProcessing(), 300);
+        if (querySource === "dataset") {
+          setTimeout(() => finishProcessing(), 300);
+        }
       }
     } catch {
       setSendStatus("网络错误，请重试");
       setSending(false);
-      setTimeout(() => finishProcessing(), 300);
+      if (querySource === "dataset") {
+        setTimeout(() => finishProcessing(), 300);
+      }
     }
   }
 
@@ -363,15 +373,6 @@ export function App() {
         <code>/v1/sessions/&lt;id&gt;/stream?token=&lt;sse_token&gt;</code>
       </p>
 
-      {isDataAdmin && (
-        <DataManagementPanel
-          token={token!}
-          onTableListChanged={loadSessions}
-          datasetId={selectedDatasetId || undefined}
-          datasetTableId={selectedTableId || undefined}
-        />
-      )}
-
       <SessionSidebar
         sessions={sessions}
         sid={sid}
@@ -379,43 +380,40 @@ export function App() {
         onSelect={setSid}
         onSessionsChanged={loadSessions}
         datasetId={selectedDatasetId || undefined}
-        datasetTableId={selectedTableId || undefined}
+        querySource={querySource}
       />
 
       {sid && (
         <section>
           <h2>消息</h2>
 
-          {/* 数据集 / 数据表 选择器 */}
-          <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
-            <label style={{ fontSize: 13 }}>
-              数据集:
-              <select
-                value={selectedDatasetId}
-                onChange={(e) => setSelectedDatasetId(e.target.value)}
-                style={{ marginLeft: 4, padding: "2px 4px" }}
-              >
-                <option value="">请选择数据集</option>
-                {datasets.map((ds) => (
-                  <option key={ds.id} value={ds.id}>{ds.name}</option>
-                ))}
-              </select>
-            </label>
-            <label style={{ fontSize: 13 }}>
-              数据表:
-              <select
-                value={selectedTableId}
-                onChange={(e) => setSelectedTableId(e.target.value)}
-                style={{ marginLeft: 4, padding: "2px 4px" }}
-                disabled={!selectedDatasetId}
-              >
-                <option value="">请选择数据表</option>
-                {datasetTables.map((t) => (
-                  <option key={t.id} value={t.id}>{t.display_name || t.name}</option>
-                ))}
-              </select>
-            </label>
-          </div>
+          <QuerySourceSelector value={querySource} onChange={handleSourceChange} />
+
+          {querySource === "dataset" && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+              <label style={{ fontSize: 13 }}>
+                数据集:
+                <select
+                  value={selectedDatasetId}
+                  onChange={(e) => setSelectedDatasetId(e.target.value)}
+                  style={{ marginLeft: 4, padding: "2px 4px" }}
+                >
+                  <option value="">请选择数据集</option>
+                  {datasets.map((ds) => (
+                    <option key={ds.id} value={ds.id}>{ds.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+
+          {isDataAdmin && querySource === "dataset" && (
+            <DataManagementPanel
+              token={token!}
+              onTableListChanged={loadSessions}
+              datasetId={selectedDatasetId || undefined}
+            />
+          )}
 
           <form
             onSubmit={(e) => {
@@ -426,34 +424,48 @@ export function App() {
               e.currentTarget.reset();
             }}
           >
-            <ModeSelector mode={mode} onChange={handleModeChange} />
+            {querySource === "dataset" && <ModeSelector mode={mode} onChange={handleModeChange} />}
             <div className={styles.inputRow}>
               <input
                 name="t"
-                placeholder="例如：how many rows in demo_sales"
+                placeholder={querySource === "dataset" ? "例如：how many rows in demo_sales" : "请输入知识库查询问题"}
                 className={styles.textInput}
                 disabled={sending}
               />
-              <button type="submit" className={styles.sendButton} disabled={sending}>
+              <button type="submit" className={styles.sendButton} disabled={sending || (querySource === "dataset" && !selectedDatasetId)}>
                 {sending ? "处理中..." : "发送"}
               </button>
             </div>
           </form>
 
-          {isProcessing ? (
+          {querySource === "dataset" && isProcessing && (
             <ProgressPanel
               steps={currentSteps}
               stepStates={stepStates}
               elapsedMs={elapsedMs}
               estimatedRemainingMs={estimatedRemainingMs}
             />
-          ) : sendStatus ? (
+          )}
+
+          {querySource === "knowledge" && sending && (
+            <div style={{ padding: "12px 0", display: "flex", alignItems: "center", gap: 8 }}>
+              <span className={styles.spinner} />
+              <span style={{ fontSize: 14, color: "#555" }}>正在检索知识库...</span>
+              <span style={{ fontSize: 12, color: "#999" }}>预计等待 2-5 秒</span>
+            </div>
+          )}
+
+          {sendStatus && (
             <p className={`${styles.statusText} ${sendStatus.startsWith("错误") ? styles.statusError : styles.statusInfo}`}>
               {sendStatus}
             </p>
-          ) : (
+          )}
+
+          {!isProcessing && !sendStatus && !sending && (
             <p className={`${styles.statusText} ${styles.statusHint}`}>
-              {fmtModeDesc(mode)}
+              {querySource === "dataset"
+                ? fmtModeDesc(mode)
+                : "📚 知识库查询：通过 RAG + LLM 进行问答，预计等待 2-5 秒"}
             </p>
           )}
 

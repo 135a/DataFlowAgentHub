@@ -423,24 +423,3 @@ func TestUploadDataAsViewerForbidden(t *testing.T) {
 		t.Errorf("expected 403 for viewer, got %d", resp.StatusCode)
 	}
 }
-
-// --- Schema Tables Test ---
-
-func TestListTablesAsOperator(t *testing.T) {
-	pool := setupTestDB(t)
-	app := setupTestApp(t, pool, nil)
-	srv := newTestServer(app)
-	defer srv.Close()
-
-	tok := testJWTForRole(t, app.Cfg.JWTSecret, "operator")
-	req := authedRequest(t, http.MethodGet, srv.URL+"/v1/schema/tables", "", tok)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET /v1/schema/tables failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected 200, got %d", resp.StatusCode)
-	}
-}

@@ -1,0 +1,61 @@
+.container {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.button {
+  padding: 6px 18px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 20px;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.4;
+}
+
+.buttonKnowledge {
+  border: 1.5px solid #059669;
+}
+
+.buttonDataset {
+  border: 1.5px solid #2563EB;
+}
+
+.buttonActive {
+  color: #fff;
+}
+
+.buttonActiveKnowledge {
+  background: #059669;
+}
+
+.buttonActiveDataset {
+  background: #2563EB;
+}
+
+.buttonInactive {
+  background: transparent;
+}
+
+.buttonInactiveKnowledge {
+  color: #059669;
+}
+
+.buttonInactiveDataset {
+  color: #2563EB;
+}
+
+.subText {
+  font-size: 10px;
+  opacity: 0.65;
+}
+
+.subTextActive {
+  opacity: 0.9;
+}

@@ -8,15 +8,15 @@ interface Props {
   onSelect: (id: string) => void;
   onSessionsChanged: () => void;
   datasetId?: string;
-  datasetTableId?: string;
+  querySource?: string;
 }
 
-export function SessionSidebar({ sessions, sid, token, onSelect, onSessionsChanged, datasetId, datasetTableId }: Props) {
+export function SessionSidebar({ sessions, sid, token, onSelect, onSessionsChanged, datasetId, querySource }: Props) {
   async function createSession() {
     try {
       const body: Record<string, string> = { title: "新会话" };
+      if (querySource) body.query_source = querySource;
       if (datasetId) body.dataset_id = datasetId;
-      if (datasetTableId) body.dataset_table_id = datasetTableId;
       const r = await fetch("/v1/sessions", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
