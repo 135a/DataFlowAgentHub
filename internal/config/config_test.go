@@ -66,7 +66,16 @@ func TestLoad_ValidConfig(t *testing.T) {
 	if cfg.HTTPAddr == "" {
 		t.Error("HTTPAddr should have default value")
 	}
-	if cfg.DatabaseURL == "" {
-		t.Error("DatabaseURL should have default value")
+	if cfg.MySQLHost != "localhost" {
+		t.Errorf("MySQLHost = %q, want %q", cfg.MySQLHost, "localhost")
+	}
+	if cfg.MySQLPort != 3306 {
+		t.Errorf("MySQLPort = %d, want %d", cfg.MySQLPort, 3306)
+	}
+	if cfg.MySQLRootUser != "root" {
+		t.Errorf("MySQLRootUser = %q, want %q", cfg.MySQLRootUser, "root")
+	}
+	if cfg.MySQLPlatformDB != "hub_platform" {
+		t.Errorf("MySQLPlatformDB = %q, want %q", cfg.MySQLPlatformDB, "hub_platform")
 	}
 }

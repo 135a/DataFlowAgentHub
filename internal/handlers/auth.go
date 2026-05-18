@@ -57,7 +57,7 @@ func (a *App) Register(w http.ResponseWriter, r *http.Request) {
 
 	// 检查手机号是否已存在
 	var exists int
-	if err := a.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM users WHERE workspace_id = $1 AND phone = $2`,
+	if err := a.DB.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM users WHERE workspace_id = ? AND phone = ?`,
 		seed.DemoWorkspaceID(), body.Phone).Scan(&exists); err != nil {
 		a.Log.Warn("check phone exists", zap.Error(err))
 	}
@@ -75,9 +75,9 @@ func (a *App) Register(w http.ResponseWriter, r *http.Request) {
 
 	id := uuid.NewString()
 	placeholderEmail := body.Phone + "@phone.local"
-	_, err = a.DB.Exec(r.Context(), `
+	_, err = a.DB.ExecContext(r.Context(), `
 		INSERT INTO users (id, workspace_id, name, phone, email, password_hash, role)
-		VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		id, seed.DemoWorkspaceID(), body.Name, body.Phone, placeholderEmail, string(hash), body.Role)
 	if err != nil {
 		a.Log.Error("insert user", zap.Error(err))
@@ -112,7 +112,7 @@ func (a *App) SelfRegister(w http.ResponseWriter, r *http.Request) {
 
 	// 检查手机号是否已存在
 	var exists int
-	if err := a.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM users WHERE workspace_id = $1 AND phone = $2`,
+	if err := a.DB.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM users WHERE workspace_id = ? AND phone = ?`,
 		seed.DemoWorkspaceID(), body.Phone).Scan(&exists); err != nil {
 		a.Log.Warn("check phone exists", zap.Error(err))
 	}
@@ -130,9 +130,9 @@ func (a *App) SelfRegister(w http.ResponseWriter, r *http.Request) {
 
 	id := uuid.NewString()
 	placeholderEmail := body.Phone + "@phone.local"
-	_, err = a.DB.Exec(r.Context(), `
+	_, err = a.DB.ExecContext(r.Context(), `
 		INSERT INTO users (id, workspace_id, name, phone, email, password_hash, role)
-		VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, 'normal_user')`,
+		VALUES (?, ?, ?, ?, ?, ?, 'normal_user')`,
 		id, seed.DemoWorkspaceID(), body.Name, body.Phone, placeholderEmail, string(hash))
 	if err != nil {
 		a.Log.Error("insert user", zap.Error(err))
@@ -156,9 +156,9 @@ func (a *App) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := a.DB.Query(r.Context(), `
-		SELECT id::text, name, phone, role, created_at
-		FROM users WHERE workspace_id = $1::uuid
+	rows, err := a.DB.QueryContext(r.Context(), `
+		SELECT id, name, phone, role, created_at
+		FROM users WHERE workspace_id = ?
 		ORDER BY created_at ASC`, seed.DemoWorkspaceID())
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "db error")
@@ -227,7 +227,7 @@ func (a *App) ChangeUserRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var targetRole string
-	err := a.DB.QueryRow(r.Context(), `SELECT role FROM users WHERE id = $1::uuid AND workspace_id = $2::uuid`,
+	err := a.DB.QueryRowContext(r.Context(), `SELECT role FROM users WHERE id = ? AND workspace_id = ?`,
 		userID, seed.DemoWorkspaceID()).Scan(&targetRole)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "user not found")
@@ -238,7 +238,7 @@ func (a *App) ChangeUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = a.DB.Exec(r.Context(), `UPDATE users SET role = $1 WHERE id = $2::uuid`, body.Role, userID)
+	_, err = a.DB.ExecContext(r.Context(), `UPDATE users SET role = ? WHERE id = ?`, body.Role, userID)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "db error")
 		return
@@ -266,7 +266,7 @@ func (a *App) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var targetRole string
-	err := a.DB.QueryRow(r.Context(), `SELECT role FROM users WHERE id = $1::uuid AND workspace_id = $2::uuid`,
+	err := a.DB.QueryRowContext(r.Context(), `SELECT role FROM users WHERE id = ? AND workspace_id = ?`,
 		userID, seed.DemoWorkspaceID()).Scan(&targetRole)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "user not found")
@@ -277,7 +277,7 @@ func (a *App) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = a.DB.Exec(r.Context(), `DELETE FROM users WHERE id = $1::uuid AND workspace_id = $2::uuid`,
+	_, err = a.DB.ExecContext(r.Context(), `DELETE FROM users WHERE id = ? AND workspace_id = ?`,
 		userID, seed.DemoWorkspaceID())
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "db error")
@@ -310,9 +310,9 @@ func (a *App) CreateUpgradeRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := uuid.NewString()
-	_, err := a.DB.Exec(r.Context(), `
+	_, err := a.DB.ExecContext(r.Context(), `
 		INSERT INTO permission_requests (id, user_id, requested_role, reason)
-		VALUES ($1::uuid, $2::uuid, $3, $4)`,
+		VALUES (?, ?, ?, ?)`,
 		id, c.UserID, body.RequestedRole, body.Reason)
 	if err != nil {
 		a.Log.Error("create upgrade request", zap.Error(err))
@@ -336,11 +336,11 @@ func (a *App) ListUpgradeRequests(w http.ResponseWriter, r *http.Request) {
 		statusFilter = "pending"
 	}
 
-	rows, err := a.DB.Query(r.Context(), `
-		SELECT pr.id::text, pr.user_id::text, u.name, u.phone, pr.requested_role, pr.reason, pr.status, pr.created_at
+	rows, err := a.DB.QueryContext(r.Context(), `
+		SELECT pr.id, pr.user_id, u.name, u.phone, pr.requested_role, pr.reason, pr.status, pr.created_at
 		FROM permission_requests pr
 		JOIN users u ON u.id = pr.user_id
-		WHERE pr.status = $1
+		WHERE pr.status = ?
 		ORDER BY pr.created_at ASC`, statusFilter)
 	if err != nil {
 		a.Log.Error("list upgrade requests", zap.Error(err))
@@ -402,8 +402,8 @@ func (a *App) ReviewUpgradeRequest(w http.ResponseWriter, r *http.Request) {
 
 	// 获取申请信息
 	var userID, requestedRole, currentStatus string
-	err := a.DB.QueryRow(r.Context(), `
-		SELECT user_id::text, requested_role, status FROM permission_requests WHERE id = $1::uuid`,
+	err := a.DB.QueryRowContext(r.Context(), `
+		SELECT user_id, requested_role, status FROM permission_requests WHERE id = ?`,
 		requestID).Scan(&userID, &requestedRole, &currentStatus)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "request not found")
@@ -419,9 +419,9 @@ func (a *App) ReviewUpgradeRequest(w http.ResponseWriter, r *http.Request) {
 		newStatus = "rejected"
 	}
 
-	_, err = a.DB.Exec(r.Context(), `
-		UPDATE permission_requests SET status = $1, reviewed_by = $2::uuid, review_notes = $3, reviewed_at = NOW()
-		WHERE id = $4::uuid`, newStatus, c.UserID, body.ReviewNotes, requestID)
+	_, err = a.DB.ExecContext(r.Context(), `
+		UPDATE permission_requests SET status = ?, reviewed_by = ?, review_notes = ?, reviewed_at = NOW()
+		WHERE id = ?`, newStatus, c.UserID, body.ReviewNotes, requestID)
 	if err != nil {
 		a.Log.Error("update upgrade request", zap.Error(err))
 		errJSON(w, http.StatusInternalServerError, "db error")
@@ -430,7 +430,7 @@ func (a *App) ReviewUpgradeRequest(w http.ResponseWriter, r *http.Request) {
 
 	// 如果批准，更新用户角色
 	if body.Action == "approve" {
-		_, err = a.DB.Exec(r.Context(), `UPDATE users SET role = $1 WHERE id = $2::uuid`,
+		_, err = a.DB.ExecContext(r.Context(), `UPDATE users SET role = ? WHERE id = ?`,
 			requestedRole, userID)
 		if err != nil {
 			a.Log.Error("update user role after approval", zap.Error(err))

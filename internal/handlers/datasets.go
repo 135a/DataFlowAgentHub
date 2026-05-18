@@ -2,16 +2,16 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
 
-"github.com/dataflowagenthub/hub/internal/middleware"
+	"github.com/dataflowagenthub/hub/internal/middleware"
 	"github.com/dataflowagenthub/hub/internal/rbac"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -40,10 +40,10 @@ func (a *App) hasDatasetAccess(ctx context.Context, userID, datasetID, role stri
 		return true
 	}
 	var count int
-	err := a.DB.QueryRow(ctx,
+	err := a.DB.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM dataset_permissions dp
 		 JOIN datasets d ON d.id = dp.dataset_id
-		 WHERE dp.dataset_id = $1::uuid AND dp.user_id = $2::uuid AND d.status != 'deleted'`,
+		 WHERE dp.dataset_id = ? AND dp.user_id = ? AND d.status != 'deleted'`,
 		datasetID, userID).Scan(&count)
 	return err == nil && count > 0
 }
@@ -56,24 +56,23 @@ func (a *App) ListDatasets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var rows pgx.Rows
+	var rows *sql.Rows
 	var err error
 
 	if c.Role == "super_admin" {
-		rows, err = a.DB.Query(r.Context(), `
-			SELECT d.id::text, d.name, d.mysql_database, d.status, d.created_at, d.updated_at
+		rows, err = a.DB.QueryContext(r.Context(), `
+			SELECT d.id, d.name, d.mysql_database, d.status, d.created_at, d.updated_at
 			FROM datasets d
 			WHERE d.status != 'deleted'
 			ORDER BY d.created_at DESC`)
 	} else {
-		rows, err = a.DB.Query(r.Context(), `
-			SELECT d.id::text, d.name, d.mysql_database, d.status, d.created_at, d.updated_at
+		rows, err = a.DB.QueryContext(r.Context(), `
+			SELECT d.id, d.name, d.mysql_database, d.status, d.created_at, d.updated_at
 			FROM datasets d
 			JOIN dataset_permissions dp ON dp.dataset_id = d.id
-			WHERE dp.user_id = $1::uuid AND d.status != 'deleted'
+			WHERE dp.user_id = ? AND d.status != 'deleted'
 			ORDER BY d.created_at DESC`, c.UserID)
 	}
-
 	if err != nil {
 		a.Log.Error("list datasets", zap.Error(err))
 		errJSON(w, http.StatusInternalServerError, "db error")
@@ -124,7 +123,7 @@ func (a *App) CreateDataset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var exists int
-	if err := a.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM datasets WHERE name = $1`, body.Name).Scan(&exists); err != nil {
+	if err := a.DB.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM datasets WHERE name = ?`, body.Name).Scan(&exists); err != nil {
 		a.Log.Warn("check dataset name", zap.Error(err))
 	}
 	if exists > 0 {
@@ -140,9 +139,9 @@ func (a *App) CreateDataset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := uuid.NewString()
-	_, err := a.DB.Exec(r.Context(), `
+	_, err := a.DB.ExecContext(r.Context(), `
 		INSERT INTO datasets (id, name, mysql_database, created_by)
-		VALUES ($1::uuid, $2, $3, $4::uuid)`,
+		VALUES (?, ?, ?, ?)`,
 		id, body.Name, mysqlDB, c.UserID)
 	if err != nil {
 		if dropErr := a.MySQLMgr.DropDatabase(mysqlDB); dropErr != nil {
@@ -154,9 +153,9 @@ func (a *App) CreateDataset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 自动授予 super_admin admin 权限
-	_, err = a.DB.Exec(r.Context(), `
+	_, err = a.DB.ExecContext(r.Context(), `
 		INSERT INTO dataset_permissions (dataset_id, user_id, permission_level)
-		VALUES ($1::uuid, $2::uuid, 'admin')`, id, c.UserID)
+		VALUES (?, ?, 'admin')`, id, c.UserID)
 	if err != nil {
 		a.Log.Warn("grant self permission", zap.Error(err))
 	}
@@ -190,9 +189,9 @@ func (a *App) GetDataset(w http.ResponseWriter, r *http.Request) {
 	var name, mysqlDB, status string
 	var createdBy *string
 	var createdAt, updatedAt time.Time
-	err := a.DB.QueryRow(r.Context(), `
-		SELECT name, mysql_database, status, created_by::text, created_at, updated_at
-		FROM datasets WHERE id = $1::uuid`, id).
+	err := a.DB.QueryRowContext(r.Context(), `
+		SELECT name, mysql_database, status, created_by, created_at, updated_at
+		FROM datasets WHERE id = ?`, id).
 		Scan(&name, &mysqlDB, &status, &createdBy, &createdAt, &updatedAt)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "dataset not found")
@@ -242,7 +241,7 @@ func (a *App) UpdateDataset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var exists int
-	if err := a.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM datasets WHERE name = $1 AND id != $2::uuid`,
+	if err := a.DB.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM datasets WHERE name = ? AND id != ?`,
 		body.Name, id).Scan(&exists); err != nil {
 		a.Log.Warn("check dataset name", zap.Error(err))
 	}
@@ -251,7 +250,7 @@ func (a *App) UpdateDataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := a.DB.Exec(r.Context(), `UPDATE datasets SET name = $1, updated_at = NOW() WHERE id = $2::uuid`,
+	_, err := a.DB.ExecContext(r.Context(), `UPDATE datasets SET name = ?, updated_at = NOW() WHERE id = ?`,
 		body.Name, id)
 	if err != nil {
 		a.Log.Error("update dataset", zap.Error(err))
@@ -277,7 +276,7 @@ func (a *App) DeleteDataset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var mysqlDB string
-	err := a.DB.QueryRow(r.Context(), `SELECT mysql_database FROM datasets WHERE id = $1::uuid`, id).Scan(&mysqlDB)
+	err := a.DB.QueryRowContext(r.Context(), `SELECT mysql_database FROM datasets WHERE id = ?`, id).Scan(&mysqlDB)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "dataset not found")
 		return
@@ -287,7 +286,7 @@ func (a *App) DeleteDataset(w http.ResponseWriter, r *http.Request) {
 		a.Log.Error("drop mysql database", zap.Error(err))
 	}
 
-	_, err = a.DB.Exec(r.Context(), `UPDATE datasets SET status = 'deleted', updated_at = NOW() WHERE id = $1::uuid`, id)
+	_, err = a.DB.ExecContext(r.Context(), `UPDATE datasets SET status = 'deleted', updated_at = NOW() WHERE id = ?`, id)
 	if err != nil {
 		a.Log.Error("delete dataset", zap.Error(err))
 		errJSON(w, http.StatusInternalServerError, "db error")
@@ -332,16 +331,16 @@ func (a *App) GrantDatasetAccess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var exists int
-	if err := a.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM datasets WHERE id = $1::uuid AND status != 'deleted'`,
+	if err := a.DB.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM datasets WHERE id = ? AND status != 'deleted'`,
 		datasetID).Scan(&exists); err != nil || exists == 0 {
 		errJSON(w, http.StatusNotFound, "dataset not found")
 		return
 	}
 
-	_, err := a.DB.Exec(r.Context(), `
+	_, err := a.DB.ExecContext(r.Context(), `
 		INSERT INTO dataset_permissions (dataset_id, user_id, permission_level)
-		VALUES ($1::uuid, $2::uuid, $3)
-		ON CONFLICT (dataset_id, user_id) DO UPDATE SET permission_level = $3`,
+		VALUES (?, ?, ?)
+		ON DUPLICATE KEY UPDATE permission_level = VALUES(permission_level)`,
 		datasetID, body.UserID, body.PermissionLevel)
 	if err != nil {
 		a.Log.Error("grant dataset access", zap.Error(err))
@@ -378,8 +377,8 @@ func (a *App) RevokeDatasetAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := a.DB.Exec(r.Context(), `
-		DELETE FROM dataset_permissions WHERE dataset_id = $1::uuid AND user_id = $2::uuid`,
+	_, err := a.DB.ExecContext(r.Context(), `
+		DELETE FROM dataset_permissions WHERE dataset_id = ? AND user_id = ?`,
 		datasetID, body.UserID)
 	if err != nil {
 		a.Log.Error("revoke dataset access", zap.Error(err))

@@ -45,10 +45,10 @@ func (a *App) ListKnowledgeDocs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := a.DB.Query(r.Context(), `
-		SELECT id::text, title, doc_type, status, created_at
+	rows, err := a.DB.QueryContext(r.Context(), `
+		SELECT id, title, doc_type, status, created_at
 		FROM knowledge_docs
-		WHERE workspace_id = $1::uuid
+		WHERE workspace_id = ?
 		ORDER BY created_at DESC`, wsID)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "db error")
@@ -103,9 +103,9 @@ func (a *App) UploadKnowledgeDoc(w http.ResponseWriter, r *http.Request) {
 	docID := uuid.NewString()
 
 	// 1. 插入数据库
-	_, err := a.DB.Exec(r.Context(), `
+	_, err := a.DB.ExecContext(r.Context(), `
 		INSERT INTO knowledge_docs (id, workspace_id, title, content_hash, created_by, status)
-		VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid, 'pending')`,
+		VALUES (?, ?, ?, ?, ?, 'pending')`,
 		docID, wsID, body.Title, hashStr, c.UserID)
 	if err != nil {
 		a.Log.Error("insert knowledge doc", zap.Error(err))
@@ -190,9 +190,9 @@ func (a *App) UploadKnowledgeDocFromFile(w http.ResponseWriter, r *http.Request)
 	}
 
 	// 1b. 插入数据库
-	_, dbErr := a.DB.Exec(r.Context(), `
+	_, dbErr := a.DB.ExecContext(r.Context(), `
 		INSERT INTO knowledge_docs (id, workspace_id, title, doc_type, content_hash, created_by, status)
-		VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6::uuid, 'pending')`,
+		VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
 		docID, wsID, title, docType, hashStr, c.UserID)
 	if dbErr != nil {
 		a.Log.Error("insert knowledge doc", zap.Error(dbErr))
@@ -257,8 +257,8 @@ func (a *App) DownloadKnowledgeDoc(w http.ResponseWriter, r *http.Request) {
 
 	// 查询数据库获取文档信息
 	var workspaceID, title, docType string
-	err := a.DB.QueryRow(r.Context(), `
-		SELECT workspace_id::text, title, doc_type FROM knowledge_docs WHERE id = $1::uuid`, docID).Scan(&workspaceID, &title, &docType)
+	err := a.DB.QueryRowContext(r.Context(), `
+		SELECT workspace_id, title, doc_type FROM knowledge_docs WHERE id = ?`, docID).Scan(&workspaceID, &title, &docType)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "document not found")
 		return

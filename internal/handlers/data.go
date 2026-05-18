@@ -73,11 +73,11 @@ func (a *App) uploadToDataset(w http.ResponseWriter, r *http.Request, form uploa
 
 	// 获取表元数据
 	var mysqlDB, mysqlTableName string
-	err := a.DB.QueryRow(r.Context(), `
+	err := a.DB.QueryRowContext(r.Context(), `
 		SELECT d.mysql_database, dt.mysql_table_name
 		FROM dataset_tables dt
 		JOIN datasets d ON d.id = dt.dataset_id
-		WHERE dt.id = $1::uuid AND dt.dataset_id = $2::uuid AND dt.status = 'active'`,
+		WHERE dt.id = ? AND dt.dataset_id = ? AND dt.status = 'active'`,
 		form.TableID, form.DatasetID).Scan(&mysqlDB, &mysqlTableName)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "table not found in dataset")
@@ -240,9 +240,9 @@ func parseXLSX(data []byte) (parseResult, error) {
 
 // getDatasetTableFields 从 table_fields 表读取数据集的字段定义
 func (a *App) getDatasetTableFields(r *http.Request, tableID string) (map[string]string, error) {
-	rows, err := a.DB.Query(r.Context(), `
+	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT name, field_type FROM table_fields
-		WHERE table_id = $1::uuid
+		WHERE table_id = ?
 		ORDER BY ordinal_position ASC`, tableID)
 	if err != nil {
 		return nil, err
@@ -491,7 +491,7 @@ func (a *App) executeSQLFile(ctx context.Context, pool *sql.DB, fileData []byte,
 			continue
 		}
 
-		affected, err := sqlrun.ExecuteWriteMySQL(ctx, pool, stmt, 30*time.Second)
+		affected, err := sqlrun.ExecuteWrite(ctx, pool, stmt, 30*time.Second)
 		if err != nil {
 			result.Failed++
 			result.Errors = append(result.Errors, fmt.Sprintf("statement %d: %s", i+1, err.Error()))
@@ -552,9 +552,9 @@ func (a *App) getDatasetPool(ctx context.Context, datasetID string) (*sql.DB, er
 		return pool, nil
 	}
 	var mysqlDB string
-	err := a.DB.QueryRow(ctx, `
+	err := a.DB.QueryRowContext(ctx, `
 		SELECT mysql_database FROM datasets
-		WHERE id = $1::uuid AND status = 'active'`, datasetID).Scan(&mysqlDB)
+		WHERE id = ? AND status = 'active'`, datasetID).Scan(&mysqlDB)
 	if err != nil {
 		return nil, fmt.Errorf("dataset not found or inactive")
 	}
@@ -623,7 +623,7 @@ func (a *App) ExecuteDataSQL(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		rows, err := sqlrun.QueryRowsMySQL(r.Context(), pool, body.SQL, maxRows+1, queryTimeout)
+		rows, err := sqlrun.QueryRows(r.Context(), pool, body.SQL, maxRows+1, queryTimeout)
 		if err != nil {
 			errJSON(w, http.StatusBadRequest, fmt.Sprintf("query failed: %s", err.Error()))
 			return
@@ -658,7 +658,7 @@ func (a *App) ExecuteDataSQL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// INSERT / UPDATE — 执行写操作
-	affected, err := sqlrun.ExecuteWriteMySQL(r.Context(), pool, body.SQL, writeTimeout)
+	affected, err := sqlrun.ExecuteWrite(r.Context(), pool, body.SQL, writeTimeout)
 	if err != nil {
 		errJSON(w, http.StatusBadRequest, fmt.Sprintf("execute failed: %s", err.Error()))
 		return

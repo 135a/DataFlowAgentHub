@@ -1,7 +1,6 @@
 package schema
 
 import (
-	"os"
 	"testing"
 )
 
@@ -43,29 +42,6 @@ func TestSchemaResult_ToJSON_Empty(t *testing.T) {
 	if jsonStr != `{"tables":[]}` {
 		t.Errorf("ToJSON() empty = %q, want %q", jsonStr, `{"tables":[]}`)
 	}
-}
-
-func TestConnectToExternalDataSource_InvalidHost(t *testing.T) {
-	_, err := ConnectToExternalDataSource(t.Context(), "invalid-host-that-does-not-exist.local", 5432, "db", "user", "pass", "disable")
-	if err == nil {
-		t.Error("expected error for invalid host, got nil")
-	}
-}
-
-func TestCachedSchema_RedisDown(t *testing.T) {
-	redisAddr := os.Getenv("HUB_REDIS_ADDR")
-	if redisAddr == "" {
-		t.Skip("HUB_REDIS_ADDR not set, skipping integration test")
-	}
-
-	dbURL := os.Getenv("HUB_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("HUB_DATABASE_URL not set, skipping integration test")
-	}
-
-	// This test validates end-to-end schema discovery with caching.
-	// It requires a running Postgres and Redis instance.
-	t.Log("Integration test requires running Postgres and Redis - skipping auto-validation")
 }
 
 func TestCacheKey(t *testing.T) {

@@ -2,11 +2,11 @@ package async
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -34,14 +34,14 @@ type Task struct {
 // Client 封装了异步任务队列的客户端。
 // 支持 NATS 消息发布和任务超时检测。
 type Client struct {
-	DB      *pgxpool.Pool
+	DB      *sql.DB
 	NATS    *nats.Conn
 	Log     *zap.Logger
 	Timeout time.Duration // 任务超时时间（默认 120s），0 表示不检测超时
 	Bus     ssebus.Bus    // SSE 总线，用于超时通知（可为 nil）
 }
 
-func NewClient(db *pgxpool.Pool, nc *nats.Conn, log *zap.Logger) *Client {
+func NewClient(db *sql.DB, nc *nats.Conn, log *zap.Logger) *Client {
 	return &Client{
 		DB:      db,
 		NATS:    nc,
@@ -59,10 +59,9 @@ func (c *Client) EnqueueTask(ctx context.Context, wsID, sessionID, runID, taskTy
 		return "", fmt.Errorf("marshal task payload: %w", err)
 	}
 
-	err = c.DB.QueryRow(ctx, `
+	err = c.DB.QueryRowContext(ctx, `
 		INSERT INTO async_tasks (workspace_id, session_id, run_id, task_type, payload, status)
-		VALUES ($1::uuid, NULLIF($2, '')::uuid, NULLIF($3, '')::uuid, $4, $5, 'queued')
-		RETURNING id::text`,
+		VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, 'queued')`,
 		wsID, sessionID, runID, taskType, payloadJSON).Scan(&taskID)
 	if err != nil {
 		return "", err
@@ -110,8 +109,8 @@ func (c *Client) startTimeoutWatcher(taskID, sessionID string, timeout time.Dura
 			defer cancel()
 
 			var status string
-			err := c.DB.QueryRow(ctx,
-				`SELECT status FROM async_tasks WHERE id = $1::uuid`, taskID,
+			err := c.DB.QueryRowContext(ctx,
+				`SELECT status FROM async_tasks WHERE id = ?`, taskID,
 			).Scan(&status)
 
 			if err != nil {
@@ -127,9 +126,9 @@ func (c *Client) startTimeoutWatcher(taskID, sessionID string, timeout time.Dura
 				return
 			}
 
-			_, err = c.DB.Exec(ctx,
-				`UPDATE async_tasks SET status = 'timeout', updated_at = now(), error_message = 'task timed out after ' || $2::text WHERE id = $1::uuid AND status IN ('queued', 'running')`,
-				taskID, timeout.String(),
+			_, err = c.DB.ExecContext(ctx,
+				`UPDATE async_tasks SET status = 'timeout', updated_at = NOW(), error_message = CONCAT('task timed out after ', ?) WHERE id = ? AND status IN ('queued', 'running')`,
+				timeout.String(), taskID,
 			)
 			if err != nil {
 				c.Log.Error("timeout checker: failed to update task",
@@ -182,14 +181,14 @@ func (c *Client) StartReaper(ctx context.Context, interval time.Duration) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				res, err := c.DB.Exec(ctx, `
+				res, err := c.DB.ExecContext(ctx, `
 					UPDATE async_tasks
-					SET status = 'expired', updated_at = now()
-					WHERE status IN ('queued', 'running') AND expires_at < now()`)
+					SET status = 'expired', updated_at = NOW()
+					WHERE status IN ('queued', 'running') AND expires_at < NOW()`)
 				if err != nil {
 					c.Log.Error("failed to reap expired tasks", zap.Error(err))
-				} else if res.RowsAffected() > 0 {
-					c.Log.Info("reaped expired tasks", zap.Int64("count", res.RowsAffected()))
+				} else if n, _ := res.RowsAffected(); n > 0 {
+					c.Log.Info("reaped expired tasks", zap.Int64("count", n))
 				}
 			}
 		}

@@ -2,18 +2,18 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/dataflowagenthub/hub/internal/connector"
 	hubcrypto "github.com/dataflowagenthub/hub/internal/crypto"
 	"github.com/dataflowagenthub/hub/internal/middleware"
 	"github.com/dataflowagenthub/hub/internal/ratelimit"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
 
@@ -31,10 +31,10 @@ type createDSBody struct {
 // ListDataSources 返回已配置的数据源（不包含密码值）
 func (a *App) ListDataSources(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
-	rows, err := a.DB.Query(r.Context(), `
-		SELECT id::text, name, kind, host, port, database, username,
-		       (length(password) > 0) AS has_password, sslmode, created_at
-		FROM data_sources WHERE workspace_id = $1::uuid ORDER BY created_at DESC`,
+	rows, err := a.DB.QueryContext(r.Context(), `
+		SELECT id, name, kind, host, port, database, username,
+		       (LENGTH(password) > 0) AS has_password, sslmode, created_at
+		FROM data_sources WHERE workspace_id = ? ORDER BY created_at DESC`,
 		c.WorkspaceID)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "db")
@@ -79,8 +79,8 @@ func (a *App) CreateDataSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Kind = strings.ToLower(strings.TrimSpace(body.Kind))
-	if body.Kind != "postgres" {
-		errJSON(w, http.StatusBadRequest, "kind must be postgres")
+	if body.Kind != "mysql" {
+		errJSON(w, http.StatusBadRequest, "kind must be mysql")
 		return
 	}
 	if body.Name == "" || body.Host == "" || body.Port == 0 || body.Database == "" || body.Username == "" {
@@ -99,9 +99,9 @@ func (a *App) CreateDataSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := uuid.NewString()
-	_, err = a.DB.Exec(r.Context(), `
+	_, err = a.DB.ExecContext(r.Context(), `
 		INSERT INTO data_sources (id, workspace_id, name, kind, host, port, database, username, password, sslmode)
-		VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, c.WorkspaceID, body.Name, body.Kind, body.Host, body.Port, body.Database, body.Username, encryptedPassword, body.SSLMode)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "db")
@@ -110,15 +110,15 @@ func (a *App) CreateDataSource(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusCreated, map[string]any{"id": id, "name": body.Name, "has_password": body.Password != ""})
 }
 
-// TestDataSource 对已存储的 postgres 数据源执行 ping 测试
+// TestDataSource 对已存储的 mysql 数据源执行 ping 测试
 func (a *App) TestDataSource(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
 	id := chi.URLParam(r, "id")
 	var host, db, user, pwd, ssl string
 	var port int
-	err := a.DB.QueryRow(r.Context(), `
+	err := a.DB.QueryRowContext(r.Context(), `
 		SELECT host, port, database, username, password, sslmode FROM data_sources
-		WHERE id = $1::uuid AND workspace_id = $2::uuid`, id, c.WorkspaceID).Scan(&host, &port, &db, &user, &pwd, &ssl)
+		WHERE id = ? AND workspace_id = ?`, id, c.WorkspaceID).Scan(&host, &port, &db, &user, &pwd, &ssl)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "data source not found")
 		return
@@ -131,16 +131,17 @@ func (a *App) TestDataSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dsn := connector.DSN(host, port, user, decryptedPwd, db, ssl)
-	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
-	defer cancel()
-	pool, err := pgxpool.New(ctx, dsn)
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=Local&tls=%s",
+		user, decryptedPwd, host, port, db, ssl)
+	testDB, err := sql.Open("mysql", dsn)
 	if err != nil {
 		JSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	defer pool.Close()
-	if err := pool.Ping(ctx); err != nil {
+	defer testDB.Close()
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	if err := testDB.PingContext(ctx); err != nil {
 		JSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -162,8 +163,8 @@ func (a *App) UpdateDataSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Kind = strings.ToLower(strings.TrimSpace(body.Kind))
-	if body.Kind != "postgres" {
-		errJSON(w, http.StatusBadRequest, "kind must be postgres")
+	if body.Kind != "mysql" {
+		errJSON(w, http.StatusBadRequest, "kind must be mysql")
 		return
 	}
 	if body.Name == "" || body.Host == "" || body.Port == 0 || body.Database == "" || body.Username == "" {
@@ -181,9 +182,9 @@ func (a *App) UpdateDataSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tag, err := a.DB.Exec(r.Context(), `
-		UPDATE data_sources SET name=$1, kind=$2, host=$3, port=$4, database=$5, username=$6, password=$7, sslmode=$8
-		WHERE id=$9::uuid AND workspace_id=$10::uuid`,
+	res, err := a.DB.ExecContext(r.Context(), `
+		UPDATE data_sources SET name=?, kind=?, host=?, port=?, database=?, username=?, password=?, sslmode=?
+		WHERE id=? AND workspace_id=?`,
 		body.Name, body.Kind, body.Host, body.Port, body.Database, body.Username, encryptedPassword, body.SSLMode,
 		id, c.WorkspaceID)
 	if err != nil {
@@ -191,7 +192,8 @@ func (a *App) UpdateDataSource(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	n, _ := res.RowsAffected()
+	if n == 0 {
 		errJSON(w, http.StatusNotFound, "data source not found")
 		return
 	}
@@ -207,14 +209,15 @@ func (a *App) DeleteDataSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c := middleware.ClaimsFromContext(r.Context())
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM data_sources WHERE id=$1::uuid AND workspace_id=$2::uuid`,
+	res, err := a.DB.ExecContext(r.Context(), `DELETE FROM data_sources WHERE id=? AND workspace_id=?`,
 		id, c.WorkspaceID)
 	if err != nil {
 		a.Log.Error("delete data source", zap.Error(err))
 		errJSON(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	n, _ := res.RowsAffected()
+	if n == 0 {
 		errJSON(w, http.StatusNotFound, "data source not found")
 		return
 	}

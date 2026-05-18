@@ -2,12 +2,12 @@ package schema
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/dataflowagenthub/hub/internal/config"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
@@ -19,9 +19,7 @@ func cacheKey(workspaceID, sourceKey string) string {
 
 // CachedSchema 返回指定数据源的 schema 发现结果。
 // 它首先检查 Redis 缓存；未命中时调用 DiscoverSchema，将结果以配置的 TTL 存入 Redis 并返回。
-//
-// sourceKey: 使用平台数据库时为 "hub"，外部数据源时为 data_source_id。
-func CachedSchema(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, cfg *config.Config, log *zap.Logger, workspaceID, sourceKey string) (*SchemaResult, error) {
+func CachedSchema(ctx context.Context, db *sql.DB, rdb *redis.Client, cfg *config.Config, log *zap.Logger, workspaceID, sourceKey string) (*SchemaResult, error) {
 	key := cacheKey(workspaceID, sourceKey)
 
 	// 1. 尝试缓存
@@ -35,7 +33,7 @@ func CachedSchema(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, cf
 	}
 
 	// 2. 从数据库发现
-	sr, err := DiscoverSchema(ctx, pool, cfg, log)
+	sr, err := DiscoverSchema(ctx, db, cfg, log)
 	if err != nil {
 		return nil, err
 	}

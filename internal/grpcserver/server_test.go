@@ -2,52 +2,54 @@ package grpcserver
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	nlv1 "github.com/dataflowagenthub/hub/internal/gen/nl2sql/v1"
 	"github.com/dataflowagenthub/hub/internal/handlers"
 	"github.com/dataflowagenthub/hub/internal/nl2sqlexec"
 	"github.com/dataflowagenthub/hub/internal/ssebus"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-// testDBURL 读取测试数据库 URL
-func testDBURL() string {
-	if u := os.Getenv("HUB_TEST_DATABASE_URL"); u != "" {
+// testDSN 读取测试数据库 DSN
+func testDSN() string {
+	if u := os.Getenv("HUB_TEST_DSN"); u != "" {
 		return u
 	}
-	return "postgres://hub:hub@localhost:5432/hub?sslmode=disable"
+	return "root:root@tcp(localhost:3306)/hub_platform?charset=utf8mb4&parseTime=true&loc=Local"
 }
 
 // setupTestDB 尝试连接测试数据库，失败时跳过
-func setupTestDB(t *testing.T) *pgxpool.Pool {
+func setupTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, testDBURL())
+	db, err := sql.Open("mysql", testDSN())
 	if err != nil {
 		t.Skipf("skipping integration test: cannot connect to test database: %v", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
 		t.Skipf("skipping integration test: database ping failed: %v", err)
 	}
-	t.Cleanup(func() { pool.Close() })
-	return pool
+	t.Cleanup(func() { db.Close() })
+	return db
 }
 
 // mockApp 创建一个最小化的 App 用于测试
-func mockApp(t *testing.T, pool *pgxpool.Pool) *handlers.App {
+func mockApp(t *testing.T, db *sql.DB) *handlers.App {
 	t.Helper()
 	nl2sqlExec := nl2sqlexec.NewExecutor(nil, 500, 30*time.Second)
 	return &handlers.App{
 		Log:       zap.NewNop(),
-		DB:        pool,
+		DB:        db,
 		Bus:       ssebus.NewMemoryBus(zap.NewNop()),
 		NL2SQLExec: nl2sqlExec,
 	}
@@ -55,8 +57,8 @@ func mockApp(t *testing.T, pool *pgxpool.Pool) *handlers.App {
 
 // TestTaskCallback_InvalidStatus 验证无效状态返回 InvalidArgument 错误
 func TestTaskCallback_InvalidStatus(t *testing.T) {
-	pool := setupTestDB(t)
-	app := mockApp(t, pool)
+	db := setupTestDB(t)
+	app := mockApp(t, db)
 	srv := NewInternalServer(app)
 
 	ctx := context.Background()
@@ -75,8 +77,8 @@ func TestTaskCallback_InvalidStatus(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := &nlv1.TaskCallbackRequest{
-				TaskId:   "00000000-0000-0000-0000-000000000000",
-				Status:   tt.status,
+				TaskId:     "00000000-0000-0000-0000-000000000000",
+				Status:     tt.status,
 				ResultJson: "{}",
 			}
 			_, err := srv.TaskCallback(ctx, req)
@@ -96,29 +98,29 @@ func TestTaskCallback_InvalidStatus(t *testing.T) {
 
 // TestTaskCallback_ValidSucceeded 验证有效的成功状态回调
 func TestTaskCallback_ValidSucceeded(t *testing.T) {
-	pool := setupTestDB(t)
-	app := mockApp(t, pool)
+	db := setupTestDB(t)
+	app := mockApp(t, db)
 	srv := NewInternalServer(app)
 
 	ctx := context.Background()
 
 	// 查找一个已存在的 workspace 并创建一个测试任务
 	var wsID string
-	err := pool.QueryRow(ctx, `SELECT id::text FROM workspaces LIMIT 1`).Scan(&wsID)
+	err := db.QueryRowContext(ctx, `SELECT id FROM workspaces LIMIT 1`).Scan(&wsID)
 	if err != nil {
 		t.Skipf("skipping: no workspace found: %v", err)
 	}
 
-	var taskID string
-	err = pool.QueryRow(ctx, `
-		INSERT INTO async_tasks (workspace_id, task_type, status)
-		VALUES ($1::uuid, 'test', 'running')
-		RETURNING id::text`, wsID).Scan(&taskID)
+	taskID := uuid.NewString()
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO async_tasks (id, workspace_id, task_type, status)
+		VALUES (?, ?, 'test', 'running')`,
+		taskID, wsID)
 	if err != nil {
 		t.Skipf("skipping: could not create task: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(ctx, `DELETE FROM async_tasks WHERE id = $1::uuid`, taskID)
+		db.ExecContext(ctx, `DELETE FROM async_tasks WHERE id = ?`, taskID)
 	})
 
 	req := &nlv1.TaskCallbackRequest{
@@ -138,7 +140,7 @@ func TestTaskCallback_ValidSucceeded(t *testing.T) {
 	// 验证任务状态已更新
 	var status string
 	var result []byte
-	err = pool.QueryRow(ctx, `SELECT status, result FROM async_tasks WHERE id = $1::uuid`, taskID).Scan(&status, &result)
+	err = db.QueryRowContext(ctx, `SELECT status, result FROM async_tasks WHERE id = ?`, taskID).Scan(&status, &result)
 	if err != nil {
 		t.Fatalf("query task failed: %v", err)
 	}
@@ -152,28 +154,28 @@ func TestTaskCallback_ValidSucceeded(t *testing.T) {
 
 // TestTaskCallback_ValidFailed 验证有效的失败状态回调
 func TestTaskCallback_ValidFailed(t *testing.T) {
-	pool := setupTestDB(t)
-	app := mockApp(t, pool)
+	db := setupTestDB(t)
+	app := mockApp(t, db)
 	srv := NewInternalServer(app)
 
 	ctx := context.Background()
 
 	var wsID string
-	err := pool.QueryRow(ctx, `SELECT id::text FROM workspaces LIMIT 1`).Scan(&wsID)
+	err := db.QueryRowContext(ctx, `SELECT id FROM workspaces LIMIT 1`).Scan(&wsID)
 	if err != nil {
 		t.Skipf("skipping: no workspace found: %v", err)
 	}
 
-	var taskID string
-	err = pool.QueryRow(ctx, `
-		INSERT INTO async_tasks (workspace_id, task_type, status)
-		VALUES ($1::uuid, 'test', 'running')
-		RETURNING id::text`, wsID).Scan(&taskID)
+	taskID := uuid.NewString()
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO async_tasks (id, workspace_id, task_type, status)
+		VALUES (?, ?, 'test', 'running')`,
+		taskID, wsID)
 	if err != nil {
 		t.Skipf("skipping: could not create task: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(ctx, `DELETE FROM async_tasks WHERE id = $1::uuid`, taskID)
+		db.ExecContext(ctx, `DELETE FROM async_tasks WHERE id = ?`, taskID)
 	})
 
 	errMsg := "something went wrong"
@@ -194,7 +196,7 @@ func TestTaskCallback_ValidFailed(t *testing.T) {
 
 	// 验证任务状态和错误信息
 	var status, gotErrMsg string
-	err = pool.QueryRow(ctx, `SELECT status, COALESCE(error_message, '') FROM async_tasks WHERE id = $1::uuid`, taskID).Scan(&status, &gotErrMsg)
+	err = db.QueryRowContext(ctx, `SELECT status, COALESCE(error_message, '') FROM async_tasks WHERE id = ?`, taskID).Scan(&status, &gotErrMsg)
 	if err != nil {
 		t.Fatalf("query task failed: %v", err)
 	}
@@ -208,8 +210,8 @@ func TestTaskCallback_ValidFailed(t *testing.T) {
 
 // TestTaskCallback_NonexistentTask 验证对不存在的任务调用回调不会报错（静默忽略）
 func TestTaskCallback_NonexistentTask(t *testing.T) {
-	pool := setupTestDB(t)
-	app := mockApp(t, pool)
+	db := setupTestDB(t)
+	app := mockApp(t, db)
 	srv := NewInternalServer(app)
 
 	ctx := context.Background()
@@ -232,40 +234,40 @@ func TestTaskCallback_NonexistentTask(t *testing.T) {
 
 // TestRunStepCallback_Valid 验证有效的步骤回调
 func TestRunStepCallback_Valid(t *testing.T) {
-	pool := setupTestDB(t)
-	app := mockApp(t, pool)
+	db := setupTestDB(t)
+	app := mockApp(t, db)
 	srv := NewInternalServer(app)
 
 	ctx := context.Background()
 
 	var wsID string
-	err := pool.QueryRow(ctx, `SELECT id::text FROM workspaces LIMIT 1`).Scan(&wsID)
+	err := db.QueryRowContext(ctx, `SELECT id FROM workspaces LIMIT 1`).Scan(&wsID)
 	if err != nil {
 		t.Skipf("skipping: no workspace found: %v", err)
 	}
 
-	var sessionID string
-	err = pool.QueryRow(ctx, `
-		INSERT INTO sessions (workspace_id, title)
-		VALUES ($1::uuid, 'test-step-session')
-		RETURNING id::text`, wsID).Scan(&sessionID)
+	sessionID := uuid.NewString()
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO sessions (id, workspace_id, title)
+		VALUES (?, ?, 'test-step-session')`,
+		sessionID, wsID)
 	if err != nil {
 		t.Skipf("skipping: could not create session: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(ctx, `DELETE FROM sessions WHERE id = $1::uuid`, sessionID)
+		db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
 	})
 
-	var runID string
-	err = pool.QueryRow(ctx, `
-		INSERT INTO runs (session_id, status)
-		VALUES ($1::uuid, 'running')
-		RETURNING id::text`, sessionID).Scan(&runID)
+	runID := uuid.NewString()
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO runs (id, session_id, status)
+		VALUES (?, ?, 'running')`,
+		runID, sessionID)
 	if err != nil {
 		t.Skipf("skipping: could not create run: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(ctx, `DELETE FROM runs WHERE id = $1::uuid`, runID)
+		db.ExecContext(ctx, `DELETE FROM runs WHERE id = ?`, runID)
 	})
 
 	req := &nlv1.RunStepCallbackRequest{
@@ -287,8 +289,8 @@ func TestRunStepCallback_Valid(t *testing.T) {
 	// 验证步骤记录存在
 	var stepIndex int32
 	var agentName string
-	err = pool.QueryRow(ctx,
-		`SELECT step_index, agent_name FROM agent_run_steps WHERE run_id = $1::uuid ORDER BY step_index DESC LIMIT 1`,
+	err = db.QueryRowContext(ctx,
+		`SELECT step_index, agent_name FROM agent_run_steps WHERE run_id = ? ORDER BY step_index DESC LIMIT 1`,
 		runID).Scan(&stepIndex, &agentName)
 	if err != nil {
 		t.Fatalf("query step failed: %v", err)
@@ -303,8 +305,8 @@ func TestRunStepCallback_Valid(t *testing.T) {
 
 // TestRunStepCallback_NonexistentRun 验证不存在的 run_id 不会导致错误
 func TestRunStepCallback_NonexistentRun(t *testing.T) {
-	pool := setupTestDB(t)
-	app := mockApp(t, pool)
+	db := setupTestDB(t)
+	app := mockApp(t, db)
 	srv := NewInternalServer(app)
 
 	ctx := context.Background()
@@ -331,8 +333,8 @@ func TestRunStepCallback_NonexistentRun(t *testing.T) {
 
 // TestTaskCallback_EmptyTaskId 验证空 task_id 的处理
 func TestTaskCallback_EmptyTaskId(t *testing.T) {
-	pool := setupTestDB(t)
-	app := mockApp(t, pool)
+	db := setupTestDB(t)
+	app := mockApp(t, db)
 	srv := NewInternalServer(app)
 
 	ctx := context.Background()
@@ -353,8 +355,8 @@ func TestTaskCallback_EmptyTaskId(t *testing.T) {
 
 // TestNewInternalServer 验证 NewInternalServer 创建服务器
 func TestNewInternalServer(t *testing.T) {
-	pool := setupTestDB(t)
-	app := mockApp(t, pool)
+	db := setupTestDB(t)
+	app := mockApp(t, db)
 	srv := NewInternalServer(app)
 
 	if srv == nil {

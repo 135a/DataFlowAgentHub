@@ -9,7 +9,6 @@ import (
 
 	nlv1 "github.com/dataflowagenthub/hub/internal/gen/nl2sql/v1"
 	"github.com/dataflowagenthub/hub/internal/sqlrun"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // NL2SQLClient 是从自然语言生成 SQL 的接口。现有的 *worker.NL2SQLClient 自动满足此接口。
@@ -52,9 +51,8 @@ func NewExecutor(client NL2SQLClient, maxRows int32, timeout time.Duration) *Exe
 	}
 }
 
-// Execute 运行完整的 NL2SQL 管道并返回结果。
-// SELECT/WITH → QueryRows（只读）；INSERT/UPDATE/DELETE/CREATE → ExecuteWrite（分类+权限+系统表检查）。
-func (e *Executor) Execute(ctx context.Context, input Input, pool *pgxpool.Pool) (*Result, error) {
+// Execute 在 MySQL 连接池上运行完整的 NL2SQL 管道。SELECT/WITH → QueryRows；写操作 → ExecuteWrite。
+func (e *Executor) Execute(ctx context.Context, input Input, pool *sql.DB) (*Result, error) {
 	gen, err := e.client.GenerateSQL(ctx, input.TraceID, input.SessionID, input.UserMessage, input.SchemaJSON, input.Dialect)
 	if err != nil {
 		return nil, err
@@ -86,51 +84,6 @@ func (e *Executor) Execute(ctx context.Context, input Input, pool *pgxpool.Pool)
 			return &Result{SQL: sql}, fmt.Errorf("cannot operate on system table %s", tbl)
 		}
 		affected, err := sqlrun.ExecuteWrite(ctx, pool, sql, e.timeout)
-		if err != nil {
-			return &Result{SQL: sql}, err
-		}
-		return &Result{
-			SQL:            sql,
-			RowsAffected:   affected,
-			IsWrite:        true,
-			SelfCheckNotes: gen.GetSelfCheckNotes(),
-		}, nil
-	}
-}
-
-// ExecuteMySQL 在 MySQL 连接池上运行完整的 NL2SQL 管道。用法同 Execute，但接受 *sql.DB。
-func (e *Executor) ExecuteMySQL(ctx context.Context, input Input, pool *sql.DB) (*Result, error) {
-	gen, err := e.client.GenerateSQL(ctx, input.TraceID, input.SessionID, input.UserMessage, input.SchemaJSON, input.Dialect)
-	if err != nil {
-		return nil, err
-	}
-	if !gen.GetOk() {
-		return nil, &GenerateError{Message: gen.GetErrorMessage()}
-	}
-
-	sql := strings.TrimSpace(gen.GetSql())
-	sqlType := sqlrun.ClassifySQL(sql)
-
-	switch sqlType {
-	case sqlrun.SQLTypeSelect:
-		rows, err := sqlrun.QueryRowsMySQL(ctx, pool, sql, e.maxRows, e.timeout)
-		if err != nil {
-			return &Result{SQL: sql}, err
-		}
-		return &Result{
-			SQL:            sql,
-			Rows:           rows,
-			SelfCheckNotes: gen.GetSelfCheckNotes(),
-		}, nil
-
-	default:
-		if err := sqlrun.IsAllowedForRole(sqlType, input.Role); err != nil {
-			return &Result{SQL: sql}, err
-		}
-		if tbl, ok := sqlrun.CheckSystemTableInSQL(sql); ok {
-			return &Result{SQL: sql}, fmt.Errorf("cannot operate on system table %s", tbl)
-		}
-		affected, err := sqlrun.ExecuteWriteMySQL(ctx, pool, sql, e.timeout)
 		if err != nil {
 			return &Result{SQL: sql}, err
 		}

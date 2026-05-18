@@ -46,7 +46,7 @@ func (a *App) DownloadReport(w http.ResponseWriter, r *http.Request) {
 
 	// 确保运行属于当前用户/工作区
 	var status string
-	err := a.DB.QueryRow(r.Context(), `SELECT status FROM runs WHERE id = $1::uuid`, runID).Scan(&status)
+	err := a.DB.QueryRowContext(r.Context(), `SELECT status FROM runs WHERE id = ?`, runID).Scan(&status)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "run not found")
 		return

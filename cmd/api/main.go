@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"database/sql"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -30,7 +33,6 @@ import (
 	"github.com/dataflowagenthub/hub/internal/seed"
 	"github.com/dataflowagenthub/hub/internal/ssebus"
 	"github.com/dataflowagenthub/hub/internal/worker"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -66,20 +68,22 @@ func main() {
 
 	// 创建上下文
 	ctx := context.Background()
-	// 创建 PostgreSQL 连接池
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	// 创建 MySQL 连接池
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=Local",
+		cfg.MySQLRootUser, cfg.MySQLRootPass, cfg.MySQLHost, cfg.MySQLPort, cfg.MySQLPlatformDB)
+	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		zl.Fatal("pg connect", zap.Error(err))
+		zl.Fatal("mysql connect", zap.Error(err))
 	}
 	// 确保在程序退出前关闭数据库连接池
-	defer pool.Close()
+	defer db.Close()
 
 	// 执行数据库迁移
-	if err := migrate.Up(ctx, pool); err != nil {
+	if err := migrate.Up(ctx, db); err != nil {
 		zl.Fatal("migrate", zap.Error(err))
 	}
 	// 确保管理员用户存在
-	if err := seed.EnsureAdminUser(ctx, pool, cfg); err != nil {
+	if err := seed.EnsureAdminUser(ctx, db, cfg); err != nil {
 		zl.Fatal("seed admin", zap.Error(err))
 	}
 	// 创建 Redis 客户端
@@ -118,7 +122,7 @@ func main() {
 	bus := ssebus.NewBus(rdb, zl)
 
 	// 创建异步任务客户端，传入 SSE 总线用于超时通知
-	asyncClient := async.NewClient(pool, nc, zl)
+	asyncClient := async.NewClient(db, nc, zl)
 	asyncClient.SetBus(bus)
 
 	// 创建 NL2SQL 执行器
@@ -143,7 +147,7 @@ func main() {
 	app := &handlers.App{
 		Cfg:        cfg,
 		Log:        zl,
-		DB:         pool,
+		DB:         db,
 		Redis:      rdb,
 		Nl2sql:     nl,
 		Bus:        bus,

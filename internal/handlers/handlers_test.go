@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,37 +19,36 @@ import (
 	"github.com/dataflowagenthub/hub/internal/seed"
 	"github.com/dataflowagenthub/hub/internal/sqlrun"
 	"github.com/dataflowagenthub/hub/internal/ssebus"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
 
-// testDBURL 从环境变量读取测试数据库 URL，或使用 docker-compose 默认值
-func testDBURL() string {
-	if u := os.Getenv("HUB_TEST_DATABASE_URL"); u != "" {
+// testDSN 从环境变量读取测试数据库 DSN，或使用 docker-compose 默认值
+func testDSN() string {
+	if u := os.Getenv("HUB_TEST_DSN"); u != "" {
 		return u
 	}
-	return "postgres://hub:hub@localhost:5432/hub?sslmode=disable"
+	return "root:root@tcp(localhost:3306)/hub_platform?charset=utf8mb4&parseTime=true&loc=Local"
 }
 
 // setupTestDB 连接到测试数据库，否则跳过测试
-func setupTestDB(t *testing.T) *pgxpool.Pool {
+func setupTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	pool, err := pgxpool.New(ctx, testDBURL())
+	db, err := sql.Open("mysql", testDSN())
 	if err != nil {
 		t.Skipf("skipping integration test: cannot connect to test database: %v", err)
 	}
-	if err := sqlrun.Ping(ctx, pool); err != nil {
-		pool.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := sqlrun.Ping(ctx, db); err != nil {
+		db.Close()
 		t.Skipf("skipping integration test: database ping failed: %v", err)
 	}
-	t.Cleanup(func() { pool.Close() })
-	return pool
+	t.Cleanup(func() { db.Close() })
+	return db
 }
 
 // setupTestApp 创建用于集成测试的最小化 App
-func setupTestApp(t *testing.T, pool *pgxpool.Pool, nl2sqlExec *nl2sqlexec.Executor) *App {
+func setupTestApp(t *testing.T, db *sql.DB, nl2sqlExec *nl2sqlexec.Executor) *App {
 	t.Helper()
 	cfg := &config.Config{
 		JWTSecret:    []byte("test-jwt-secret-for-integration-tests"),
@@ -67,7 +67,7 @@ func setupTestApp(t *testing.T, pool *pgxpool.Pool, nl2sqlExec *nl2sqlexec.Execu
 	return &App{
 		Cfg:        cfg,
 		Log:        log,
-		DB:         pool,
+		DB:         db,
 		Redis:      nil, // nil Redis = fail-open for rate limiting
 		Nl2sql:     nil,
 		Bus:        ssebus.NewMemoryBus(log),
@@ -84,8 +84,8 @@ func newTestServer(app *App) *httptest.Server {
 
 // TestHealthEndpoint 验证 /health 端点返回 200 和 ok 状态
 func TestHealthEndpoint(t *testing.T) {
-	pool := setupTestDB(t)
-	app := setupTestApp(t, pool, nil)
+	db := setupTestDB(t)
+	app := setupTestApp(t, db, nil)
 	srv := newTestServer(app)
 	defer srv.Close()
 
@@ -103,8 +103,8 @@ func TestHealthEndpoint(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if body["postgres"] != "ok" {
-		t.Errorf("expected postgres=ok, got postgres=%s", body["postgres"])
+	if body["mysql"] != "ok" {
+		t.Errorf("expected mysql=ok, got mysql=%s", body["mysql"])
 	}
 	// Redis 在测试设置中为 nil，因此它会报告 "down"
 	// 由于我们没有模拟 Redis，接受 "ok" 或 "down"
@@ -115,8 +115,8 @@ func TestHealthEndpoint(t *testing.T) {
 
 // TestLoginSuccess 验证使用正确凭据登录返回 JWT
 func TestLoginSuccess(t *testing.T) {
-	pool := setupTestDB(t)
-	app := setupTestApp(t, pool, nil)
+	db := setupTestDB(t)
+	app := setupTestApp(t, db, nil)
 	srv := newTestServer(app)
 	defer srv.Close()
 
@@ -148,8 +148,8 @@ func TestLoginSuccess(t *testing.T) {
 
 // TestLoginInvalidCredentials 验证使用错误密码登录返回 401
 func TestLoginInvalidCredentials(t *testing.T) {
-	pool := setupTestDB(t)
-	app := setupTestApp(t, pool, nil)
+	db := setupTestDB(t)
+	app := setupTestApp(t, db, nil)
 	srv := newTestServer(app)
 	defer srv.Close()
 
@@ -175,8 +175,8 @@ func TestLoginInvalidCredentials(t *testing.T) {
 
 // TestVersionEndpoint 验证 /version 端点返回版本号
 func TestVersionEndpoint(t *testing.T) {
-	pool := setupTestDB(t)
-	app := setupTestApp(t, pool, nil)
+	db := setupTestDB(t)
+	app := setupTestApp(t, db, nil)
 	srv := newTestServer(app)
 	defer srv.Close()
 
@@ -212,15 +212,15 @@ func testJWT(t *testing.T, secret []byte) string {
 }
 
 // createTestSession 在测试数据库中创建会话并返回其 ID
-func createTestSession(t *testing.T, pool *pgxpool.Pool) string {
+func createTestSession(t *testing.T, db *sql.DB) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	id := "00000000-0000-4000-8000-000000000099" // deterministic test ID
-	_, err := pool.Exec(ctx, `
+	_, err := db.ExecContext(ctx, `
 		INSERT INTO sessions (id, workspace_id, user_id, title)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'test session')
-		ON CONFLICT (id) DO NOTHING`,
+		VALUES (?, ?, ?, 'test session')
+		ON DUPLICATE KEY UPDATE title = 'test session'`,
 		id, seed.DemoWorkspaceID(), "00000000-0000-4000-8000-000000000099")
 	if err != nil {
 		t.Fatalf("failed to create test session: %v", err)
@@ -228,11 +228,11 @@ func createTestSession(t *testing.T, pool *pgxpool.Pool) string {
 	return id
 }
 
-// TestHealthEndpointUnhealthy 验证 Postgres 宕机时 /health 返回 503
+// TestHealthEndpointUnhealthy 验证 MySQL 宕机时 /health 返回 503
 func TestHealthEndpointUnhealthy(t *testing.T) {
-	pool := setupTestDB(t)
-	pool.Close() // simulate database down
-	app := setupTestApp(t, pool, nil)
+	db := setupTestDB(t)
+	db.Close() // simulate database down
+	app := setupTestApp(t, db, nil)
 	srv := newTestServer(app)
 	defer srv.Close()
 
@@ -250,15 +250,15 @@ func TestHealthEndpointUnhealthy(t *testing.T) {
 	if derr := json.NewDecoder(resp.Body).Decode(&body); derr != nil {
 		t.Fatalf("failed to decode response: %v", derr)
 	}
-	if body["postgres"] != "down" {
-		t.Errorf("expected postgres=down, got postgres=%s", body["postgres"])
+	if body["mysql"] != "down" {
+		t.Errorf("expected mysql=down, got mysql=%s", body["mysql"])
 	}
 }
 
 // TestPostMessageSessionNotFound 验证 PostMessage 对不存在的会话返回 404
 func TestPostMessageSessionNotFound(t *testing.T) {
-	pool := setupTestDB(t)
-	app := setupTestApp(t, pool, nil)
+	db := setupTestDB(t)
+	app := setupTestApp(t, db, nil)
 	srv := newTestServer(app)
 	defer srv.Close()
 
@@ -287,9 +287,9 @@ func TestPostMessageSessionNotFound(t *testing.T) {
 
 // TestPostMessageEmptyText 验证 PostMessage 在文本为空时返回 400
 func TestPostMessageEmptyText(t *testing.T) {
-	pool := setupTestDB(t)
-	sid := createTestSession(t, pool)
-	app := setupTestApp(t, pool, nil)
+	db := setupTestDB(t)
+	sid := createTestSession(t, db)
+	app := setupTestApp(t, db, nil)
 	srv := newTestServer(app)
 	defer srv.Close()
 

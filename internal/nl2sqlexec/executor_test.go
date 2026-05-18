@@ -2,13 +2,13 @@ package nl2sqlexec
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	nlv1 "github.com/dataflowagenthub/hub/internal/gen/nl2sql/v1"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // mockNL2SQLClient implements NL2SQLClient for testing.
@@ -33,7 +33,7 @@ func TestExecute_GRPCError(t *testing.T) {
 		SessionID:   "session-1",
 		UserMessage: "show all users",
 		SchemaJSON:  `{"tables":["users"]}`,
-		Dialect:     "postgres",
+		Dialect:     "mysql",
 	}
 
 	result, err := exec.Execute(context.Background(), input, nil)
@@ -62,7 +62,7 @@ func TestExecute_GenerationNotOk(t *testing.T) {
 		TraceID:     "trace-1",
 		UserMessage: "do something impossible",
 		SchemaJSON:  `{}`,
-		Dialect:     "postgres",
+		Dialect:     "mysql",
 	}
 
 	result, err := exec.Execute(context.Background(), input, nil)
@@ -95,11 +95,11 @@ func TestExecute_ReadOnlyCheckFailed(t *testing.T) {
 		TraceID:     "trace-1",
 		UserMessage: "add a user",
 		SchemaJSON:  `{"tables":["users"]}`,
-		Dialect:     "postgres",
+		Dialect:     "mysql",
 	}
 
-	// Passing nil pool is safe because sqlrun.IsReadOnlySQL fails before pool.Query.
-	result, err := exec.Execute(context.Background(), input, (*pgxpool.Pool)(nil))
+	// Passing nil db is safe because sqlrun.IsReadOnlySQL fails before db.Query.
+	result, err := exec.Execute(context.Background(), input, (*sql.DB)(nil))
 	if err == nil {
 		t.Fatal("expected error from read-only check, got nil")
 	}

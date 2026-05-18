@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,7 +27,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -40,7 +40,7 @@ const version = "0.1.0-dev"
 type App struct {
 	Cfg        *config.Config
 	Log        *zap.Logger
-	DB         *pgxpool.Pool
+	DB         *sql.DB
 	Redis      *redis.Client
 	Nl2sql     *worker.NL2SQLClient
 	Bus        ssebus.Bus
@@ -65,7 +65,7 @@ func errJSON(w http.ResponseWriter, status int, msg string) {
 // sessionBelongsToWorkspace 检查会话是否属于指定工作区
 func (a *App) sessionBelongsToWorkspace(ctx context.Context, sessionID, workspaceID string) bool {
 	var ws string
-	err := a.DB.QueryRow(ctx, `SELECT workspace_id::text FROM sessions WHERE id = $1::uuid`, sessionID).Scan(&ws)
+	err := a.DB.QueryRowContext(ctx, `SELECT workspace_id FROM sessions WHERE id = ?`, sessionID).Scan(&ws)
 	return err == nil && ws == workspaceID
 }
 
@@ -86,8 +86,8 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	var hash, role string
 	var uid string
-	err := a.DB.QueryRow(r.Context(), `
-		SELECT id::text, password_hash, role FROM users WHERE workspace_id = $1 AND email = $2`,
+	err := a.DB.QueryRowContext(r.Context(), `
+		SELECT id, password_hash, role FROM users WHERE workspace_id = ? AND email = ?`,
 		seed.DemoWorkspaceID(), strings.TrimSpace(body.Email),
 	).Scan(&uid, &hash, &role)
 	if err != nil {
@@ -144,8 +144,8 @@ func (a *App) Version(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) ListSessions(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
-	rows, err := a.DB.Query(r.Context(), `
-		SELECT id::text, title, created_at FROM sessions WHERE workspace_id = $1::uuid ORDER BY created_at DESC LIMIT 50`,
+	rows, err := a.DB.QueryContext(r.Context(), `
+		SELECT id, title, created_at FROM sessions WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 50`,
 		c.WorkspaceID)
 	if err != nil {
 		a.Log.Error("list sessions", zap.Error(err))
@@ -193,8 +193,8 @@ func (a *App) ListMessages(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusNotFound, "session not found")
 		return
 	}
-	rows, err := a.DB.Query(r.Context(), `
-		SELECT id::text, role, content, created_at FROM messages WHERE session_id = $1::uuid ORDER BY created_at ASC`,
+	rows, err := a.DB.QueryContext(r.Context(), `
+		SELECT id, role, content, created_at FROM messages WHERE session_id = ? ORDER BY created_at ASC`,
 		sid)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "db")
@@ -223,10 +223,10 @@ func (a *App) ListMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 查询运行步骤
-	stepRows, err := a.DB.Query(r.Context(), `
-		SELECT step_index, agent_name, status, input_summary, output_summary, error_message, created_at 
-		FROM agent_run_steps 
-		WHERE run_id IN (SELECT id FROM runs WHERE session_id = $1::uuid)
+	stepRows, err := a.DB.QueryContext(r.Context(), `
+		SELECT step_index, agent_name, status, input_summary, output_summary, error_message, created_at
+		FROM agent_run_steps
+		WHERE run_id IN (SELECT id FROM runs WHERE session_id = ?)
 		ORDER BY created_at ASC`, sid)
 	var steps []map[string]any
 	if err == nil {
@@ -289,8 +289,8 @@ func (a *App) CreateSession(w http.ResponseWriter, r *http.Request) {
 	var dsID *string
 	if ds := strings.TrimSpace(body.DataSourceID); ds != "" {
 		var existing string
-		err := a.DB.QueryRow(r.Context(),
-			`SELECT id::text FROM data_sources WHERE id = $1::uuid AND workspace_id = $2::uuid`,
+		err := a.DB.QueryRowContext(r.Context(),
+			`SELECT id FROM data_sources WHERE id = ? AND workspace_id = ?`,
 			ds, c.WorkspaceID).Scan(&existing)
 		if err != nil {
 			errJSON(w, http.StatusBadRequest, "data_source_id not found or not in workspace")
@@ -308,7 +308,7 @@ func (a *App) CreateSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var exists int
-		if err := a.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM datasets WHERE id = $1::uuid AND status != 'deleted'`, did).Scan(&exists); err != nil || exists == 0 {
+		if err := a.DB.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM datasets WHERE id = ? AND status != 'deleted'`, did).Scan(&exists); err != nil || exists == 0 {
 			errJSON(w, http.StatusBadRequest, "dataset not found")
 			return
 		}
@@ -318,14 +318,14 @@ func (a *App) CreateSession(w http.ResponseWriter, r *http.Request) {
 	id := uuid.NewString()
 	var err error
 	if dsID != nil {
-		_, err = a.DB.Exec(r.Context(), `
+		_, err = a.DB.ExecContext(r.Context(), `
 			INSERT INTO sessions (id, workspace_id, user_id, data_source_id, title, dataset_id)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::uuid)`,
+			VALUES (?, ?, ?, ?, ?, ?)`,
 			id, c.WorkspaceID, c.UserID, *dsID, title, dsIDPtr)
 	} else {
-		_, err = a.DB.Exec(r.Context(), `
+		_, err = a.DB.ExecContext(r.Context(), `
 			INSERT INTO sessions (id, workspace_id, user_id, title, dataset_id)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::uuid)`,
+			VALUES (?, ?, ?, ?, ?)`,
 			id, c.WorkspaceID, c.UserID, title, dsIDPtr)
 	}
 	if err != nil {
@@ -366,8 +366,8 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 
 	// 检查会话是否关联数据集
 	var datasetID *string
-	if err := a.DB.QueryRow(ctx, `
-		SELECT dataset_id::text FROM sessions WHERE id = $1::uuid`, sid).Scan(&datasetID); err != nil {
+	if err := a.DB.QueryRowContext(ctx, `
+		SELECT dataset_id FROM sessions WHERE id = ?`, sid).Scan(&datasetID); err != nil {
 		// sessions 没有 dataset 关联，继续使用旧流程
 	}
 
@@ -378,14 +378,14 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if _, err := a.DB.Exec(ctx, `INSERT INTO messages (session_id, role, content) VALUES ($1::uuid, 'user', $2)`, sid, userContent); err != nil {
+	if _, err := a.DB.ExecContext(ctx, `INSERT INTO messages (session_id, role, content) VALUES (?, 'user', ?)`, sid, userContent); err != nil {
 		a.Log.Error("insert user message", zap.Error(err))
 	}
 	a.Bus.Publish(sid, ssebus.Event{Type: "user_message", Data: map[string]string{"text": body.Text}})
 
 	// 创建 run
 	rid := uuid.NewString()
-	if _, err := a.DB.Exec(ctx, `INSERT INTO runs (id, session_id, status) VALUES ($1::uuid, $2::uuid, 'running')`, rid, sid); err != nil {
+	if _, err := a.DB.ExecContext(ctx, `INSERT INTO runs (id, session_id, status) VALUES (?, ?, 'running')`, rid, sid); err != nil {
 		a.Log.Error("insert run", zap.Error(err))
 	}
 	a.Bus.Publish(sid, ssebus.Event{Type: "run_started", Data: map[string]string{
@@ -407,10 +407,10 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 
 	// 旧流程：PostgreSQL / 外部数据源（向后兼容）
 	var dsID, dsKind *string
-	if err := a.DB.QueryRow(ctx, `
-		SELECT ds.id::text, ds.kind FROM data_sources ds
+	if err := a.DB.QueryRowContext(ctx, `
+		SELECT ds.id, ds.kind FROM data_sources ds
 		JOIN sessions s ON s.data_source_id = ds.id
-		WHERE s.id = $1::uuid`, sid).Scan(&dsID, &dsKind); err != nil {
+		WHERE s.id = ?`, sid).Scan(&dsID, &dsKind); err != nil {
 		a.Log.Debug("session has no data source, using default", zap.String("session_id", sid))
 	}
 	if dsKind == nil {
@@ -496,7 +496,7 @@ func (a *App) postMessageToDataset(ctx context.Context, w http.ResponseWriter, r
 
 	// 获取 MySQL 连接池
 	var mysqlDB string
-	if err := a.DB.QueryRow(ctx, `SELECT mysql_database FROM datasets WHERE id = $1::uuid`, datasetID).Scan(&mysqlDB); err != nil {
+	if err := a.DB.QueryRowContext(ctx, `SELECT mysql_database FROM datasets WHERE id = ?`, datasetID).Scan(&mysqlDB); err != nil {
 		a.finishRunFailed(ctx, rid, sid, "dataset not found", codes.NotFound)
 		errJSON(w, http.StatusNotFound, "dataset not found")
 		return
@@ -535,7 +535,7 @@ func (a *App) postMessageToDataset(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 
-	result, err := a.NL2SQLExec.ExecuteMySQL(ctx, nl2sqlexec.Input{
+	result, err := a.NL2SQLExec.Execute(ctx, nl2sqlexec.Input{
 		TraceID:     trace,
 		SessionID:   sid,
 		UserMessage: body.Text,
@@ -565,13 +565,13 @@ func (a *App) postMessageToDataset(ctx context.Context, w http.ResponseWriter, r
 
 // resolveDatasetSchema 从 table_fields 构建数据集下所有活跃表的 schema JSON。
 func (a *App) resolveDatasetSchema(ctx context.Context, datasetID string) (string, error) {
-	rows, err := a.DB.Query(ctx, `
+	rows, err := a.DB.QueryContext(ctx, `
 		SELECT dt.name, tf.name, tf.field_type, tf.is_nullable
 		FROM table_fields tf
 		JOIN dataset_tables dt ON dt.id = tf.table_id
 		WHERE tf.table_id IN (
 			SELECT id FROM dataset_tables
-			WHERE dataset_id = $1::uuid AND status = 'active'
+			WHERE dataset_id = ? AND status = 'active'
 		)
 		ORDER BY dt.name, tf.ordinal_position ASC`, datasetID)
 	if err != nil {
@@ -657,7 +657,12 @@ func (a *App) postMessageToKnowledge(ctx context.Context, w http.ResponseWriter,
 		}{},
 	}
 
-	finalResp, err := a.publishSyncResult(ctx, rid, sid, result, startTime)
+	nl2Result := &nl2sqlexec.Result{
+		SQL:    "",
+		Rows:   []map[string]any{{"answer": result.Answer}},
+		IsWrite: false,
+	}
+	finalResp, err := a.publishSyncResult(ctx, rid, sid, nl2Result, startTime)
 	if err != nil {
 		a.finishRunFailed(ctx, rid, sid, "marshal error", codes.Internal)
 		errJSON(w, http.StatusInternalServerError, "internal error")
@@ -669,14 +674,14 @@ func (a *App) postMessageToKnowledge(ctx context.Context, w http.ResponseWriter,
 // resolveSchema 为会话解析数据库 schema，返回 JSON 字符串
 func (a *App) resolveSchema(ctx context.Context, dsID *string, workspaceID string) (string, error) {
 	sourceKey := "hub"
-	var discoverPool *pgxpool.Pool = a.DB
+	var discoverDB *sql.DB = a.DB
 	if dsID != nil {
 		sourceKey = *dsID
-		var host, db, user, pwd, ssl string
+		var host, dbName, user, pwd, ssl string
 		var port int
-		if err := a.DB.QueryRow(ctx,
-			`SELECT host, port, database, username, password, sslmode FROM data_sources WHERE id = $1::uuid`, *dsID,
-		).Scan(&host, &port, &db, &user, &pwd, &ssl); err != nil {
+		if err := a.DB.QueryRowContext(ctx,
+			`SELECT host, port, database, username, password, sslmode FROM data_sources WHERE id = ?`, *dsID,
+		).Scan(&host, &port, &dbName, &user, &pwd, &ssl); err != nil {
 			return "", fmt.Errorf("data source not found: %w", err)
 		}
 		decryptedPwd, decErr := hubcrypto.Decrypt(pwd, a.Cfg.DBEncryptionKey)
@@ -684,15 +689,17 @@ func (a *App) resolveSchema(ctx context.Context, dsID *string, workspaceID strin
 			a.Log.Error("decrypt datasource password", zap.Error(decErr))
 			return "", fmt.Errorf("failed to decrypt datasource password")
 		}
-		extPool, connErr := schema.ConnectToExternalDataSource(ctx, host, port, db, user, decryptedPwd, ssl)
-		if connErr != nil {
-			return "", fmt.Errorf("schema discovery: cannot connect to data source: %w", connErr)
+		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=Local",
+			user, decryptedPwd, host, port, dbName)
+		extDB, openErr := sql.Open("mysql", dsn)
+		if openErr != nil {
+			return "", fmt.Errorf("schema discovery: cannot connect to data source: %w", openErr)
 		}
-		defer extPool.Close()
-		discoverPool = extPool
+		defer extDB.Close()
+		discoverDB = extDB
 	}
 
-	schemaResult, schemaErr := schema.CachedSchema(ctx, discoverPool, a.Redis, a.Cfg, a.Log, workspaceID, sourceKey)
+	schemaResult, schemaErr := schema.CachedSchema(ctx, discoverDB, a.Redis, a.Cfg, a.Log, workspaceID, sourceKey)
 	if schemaErr != nil {
 		return "", fmt.Errorf("schema discovery failed: %w", schemaErr)
 	}
@@ -760,10 +767,10 @@ func (a *App) publishSyncResult(ctx context.Context, rid, sid string, result *nl
 		}
 	}
 
-	if _, err := a.DB.Exec(ctx, `INSERT INTO messages (session_id, role, content) VALUES ($1::uuid, 'assistant', $2)`, sid, assist); err != nil {
+	if _, err := a.DB.ExecContext(ctx, `INSERT INTO messages (session_id, role, content) VALUES (?, 'assistant', ?)`, sid, assist); err != nil {
 		a.Log.Error("insert assistant message", zap.Error(err))
 	}
-	if _, err := a.DB.Exec(ctx, `UPDATE runs SET status = 'completed', updated_at = now() WHERE id = $1::uuid`, rid); err != nil {
+	if _, err := a.DB.ExecContext(ctx, `UPDATE runs SET status = 'completed', updated_at = NOW() WHERE id = ?`, rid); err != nil {
 		a.Log.Error("update run completed", zap.Error(err))
 	}
 	a.Bus.Publish(sid, ssebus.Event{Type: "result", Data: json.RawMessage(assist)})
@@ -794,10 +801,10 @@ func (a *App) finishRunFailed(ctx context.Context, runID, sessionID, msg string,
 	if err != nil {
 		a.Log.Error("marshal failed run", zap.Error(err))
 	}
-	if _, err := a.DB.Exec(ctx, `INSERT INTO messages (session_id, role, content) VALUES ($1::uuid, 'assistant', $2)`, sessionID, assist); err != nil {
+	if _, err := a.DB.ExecContext(ctx, `INSERT INTO messages (session_id, role, content) VALUES (?, 'assistant', ?)`, sessionID, assist); err != nil {
 		a.Log.Error("insert failed assistant message", zap.Error(err))
 	}
-	if _, err := a.DB.Exec(ctx, `UPDATE runs SET status = 'failed', pending_reason = $2, updated_at = now() WHERE id = $1::uuid`, runID, msg); err != nil {
+	if _, err := a.DB.ExecContext(ctx, `UPDATE runs SET status = 'failed', pending_reason = ?, updated_at = NOW() WHERE id = ?`, msg, runID); err != nil {
 		a.Log.Error("update run failed", zap.Error(err))
 	}
 	a.Bus.Publish(sessionID, ssebus.Event{Type: "error", Data: map[string]string{"message": msg}})

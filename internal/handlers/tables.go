@@ -63,10 +63,10 @@ func (a *App) ListDatasetTables(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := a.DB.Query(r.Context(), `
-		SELECT id::text, dataset_id::text, name, COALESCE(display_name, ''), mysql_table_name, status, created_by::text, created_at, updated_at
+	rows, err := a.DB.QueryContext(r.Context(), `
+		SELECT id, dataset_id, name, COALESCE(display_name, ''), mysql_table_name, status, COALESCE(created_by, ''), created_at, updated_at
 		FROM dataset_tables
-		WHERE dataset_id = $1::uuid AND status = 'active'
+		WHERE dataset_id = ? AND status = 'active'
 		ORDER BY created_at ASC`, datasetID)
 	if err != nil {
 		a.Log.Error("list tables", zap.Error(err))
@@ -139,7 +139,7 @@ func (a *App) CreateDatasetTable(w http.ResponseWriter, r *http.Request) {
 
 	// 获取数据集的 MySQL 数据库名
 	var mysqlDB string
-	err := a.DB.QueryRow(r.Context(), `SELECT mysql_database FROM datasets WHERE id = $1::uuid AND status != 'deleted'`,
+	err := a.DB.QueryRowContext(r.Context(), `SELECT mysql_database FROM datasets WHERE id = ? AND status != 'deleted'`,
 		datasetID).Scan(&mysqlDB)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "dataset not found")
@@ -148,8 +148,8 @@ func (a *App) CreateDatasetTable(w http.ResponseWriter, r *http.Request) {
 
 	// 检查数据集内表名唯一性
 	var exists int
-	if err := a.DB.QueryRow(r.Context(),
-		`SELECT COUNT(*) FROM dataset_tables WHERE dataset_id = $1::uuid AND name = $2 AND status = 'active'`,
+	if err := a.DB.QueryRowContext(r.Context(),
+		`SELECT COUNT(*) FROM dataset_tables WHERE dataset_id = ? AND name = ? AND status = 'active'`,
 		datasetID, body.Name).Scan(&exists); err != nil {
 		a.Log.Warn("check table name", zap.Error(err))
 	}
@@ -176,17 +176,17 @@ func (a *App) CreateDatasetTable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 写入元数据（dataset_tables + table_fields）
-	tx, err := a.DB.Begin(r.Context())
+	tx, err := a.DB.BeginTx(r.Context(), nil)
 	if err != nil {
 		a.Log.Error("begin tx", zap.Error(err))
 		errJSON(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 
-	_, err = tx.Exec(r.Context(), `
+	_, err = tx.ExecContext(r.Context(), `
 		INSERT INTO dataset_tables (id, dataset_id, name, display_name, mysql_table_name, created_by)
-		VALUES ($1::uuid, $2::uuid, $3, NULLIF($4, ''), $5, $6::uuid)`,
+		VALUES (?, ?, ?, NULLIF(?, ''), ?, ?)`,
 		tableID, datasetID, body.Name, body.DisplayName, mysqlTableName, c.UserID)
 	if err != nil {
 		a.Log.Error("insert dataset_table", zap.Error(err))
@@ -200,9 +200,9 @@ func (a *App) CreateDatasetTable(w http.ResponseWriter, r *http.Request) {
 		if f.FieldLen > 0 {
 			flen = f.FieldLen
 		}
-		_, err = tx.Exec(r.Context(), `
+		_, err = tx.ExecContext(r.Context(), `
 			INSERT INTO table_fields (id, table_id, name, field_type, field_length, is_nullable, ordinal_position)
-			VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			fid, tableID, f.Name, strings.ToUpper(f.FieldType), flen, f.IsNullable, i+1)
 		if err != nil {
 			a.Log.Error("insert table_field", zap.Error(err))
@@ -211,7 +211,7 @@ func (a *App) CreateDatasetTable(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		a.Log.Error("commit tx", zap.Error(err))
 		errJSON(w, http.StatusInternalServerError, "db error")
 		return
@@ -248,10 +248,10 @@ func (a *App) GetDatasetTable(w http.ResponseWriter, r *http.Request) {
 	var t tableResponse
 	var displayName, createdBy string
 	var createdAt, updatedAt time.Time
-	err := a.DB.QueryRow(r.Context(), `
-		SELECT id::text, dataset_id::text, name, COALESCE(display_name, ''), mysql_table_name, status, COALESCE(created_by::text, ''), created_at, updated_at
+	err := a.DB.QueryRowContext(r.Context(), `
+		SELECT id, dataset_id, name, COALESCE(display_name, ''), mysql_table_name, status, COALESCE(created_by, ''), created_at, updated_at
 		FROM dataset_tables
-		WHERE id = $1::uuid AND dataset_id = $2::uuid AND status = 'active'`,
+		WHERE id = ? AND dataset_id = ? AND status = 'active'`,
 		tableID, datasetID).Scan(
 		&t.ID, &t.DatasetID, &t.Name, &displayName, &t.MySQLTableName,
 		&t.Status, &createdBy, &createdAt, &updatedAt)
@@ -269,10 +269,10 @@ func (a *App) GetDatasetTable(w http.ResponseWriter, r *http.Request) {
 	t.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 
 	// 获取字段列表
-	fields, err := a.DB.Query(r.Context(), `
-		SELECT id::text, table_id::text, name, COALESCE(display_name, ''), field_type, COALESCE(field_length, 0), is_nullable, ordinal_position
+	fields, err := a.DB.QueryContext(r.Context(), `
+		SELECT id, table_id, name, COALESCE(display_name, ''), field_type, COALESCE(field_length, 0), is_nullable, ordinal_position
 		FROM table_fields
-		WHERE table_id = $1::uuid
+		WHERE table_id = ?
 		ORDER BY ordinal_position ASC`, tableID)
 	if err != nil {
 		a.Log.Error("list fields", zap.Error(err))
@@ -318,11 +318,11 @@ func (a *App) DeleteDatasetTable(w http.ResponseWriter, r *http.Request) {
 
 	// 获取表信息
 	var mysqlDB, mysqlTableName string
-	err := a.DB.QueryRow(r.Context(), `
+	err := a.DB.QueryRowContext(r.Context(), `
 		SELECT d.mysql_database, dt.mysql_table_name
 		FROM dataset_tables dt
 		JOIN datasets d ON d.id = dt.dataset_id
-		WHERE dt.id = $1::uuid AND dt.dataset_id = $2::uuid AND dt.status = 'active'`,
+		WHERE dt.id = ? AND dt.dataset_id = ? AND dt.status = 'active'`,
 		tableID, datasetID).Scan(&mysqlDB, &mysqlTableName)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "table not found")
@@ -336,9 +336,9 @@ func (a *App) DeleteDatasetTable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 逻辑删除元数据
-	_, err = a.DB.Exec(r.Context(), `
+	_, err = a.DB.ExecContext(r.Context(), `
 		UPDATE dataset_tables SET status = 'inactive', updated_at = NOW()
-		WHERE id = $1::uuid`, tableID)
+		WHERE id = ?`, tableID)
 	if err != nil {
 		a.Log.Error("delete table metadata", zap.Error(err))
 		errJSON(w, http.StatusInternalServerError, "db error")
@@ -368,10 +368,10 @@ func (a *App) ListFields(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := a.DB.Query(r.Context(), `
-		SELECT id::text, table_id::text, name, COALESCE(display_name, ''), field_type, COALESCE(field_length, 0), is_nullable, ordinal_position
+	rows, err := a.DB.QueryContext(r.Context(), `
+		SELECT id, table_id, name, COALESCE(display_name, ''), field_type, COALESCE(field_length, 0), is_nullable, ordinal_position
 		FROM table_fields
-		WHERE table_id = $1::uuid
+		WHERE table_id = ?
 		ORDER BY ordinal_position ASC`, tableID)
 	if err != nil {
 		a.Log.Error("list fields", zap.Error(err))

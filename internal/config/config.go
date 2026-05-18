@@ -13,7 +13,6 @@ import (
 type Config struct {
 	HTTPAddr     string
 	GRPCAddr     string
-	DatabaseURL  string
 	RedisAddr    string
 	JWTSecret    []byte
 	SeedEmail    string
@@ -50,11 +49,12 @@ type Config struct {
 	// GRPCClientKey 用于存储gRPC客户端私钥的路径或内容，与客户端证书配对使用
 	GRPCClientKey string
 
-	// MySQL 配置（数据集存储）
-	MySQLHost     string
-	MySQLPort     int
-	MySQLRootUser string
-	MySQLRootPass string
+	// MySQL 配置（平台元数据 + 数据集存储）
+	MySQLHost       string
+	MySQLPort       int
+	MySQLRootUser   string
+	MySQLRootPass   string
+	MySQLPlatformDB string
 }
 
 func getenv(key, def string) string {
@@ -147,7 +147,6 @@ func Load() (*Config, error) {
 	c := &Config{
 		HTTPAddr:                 getenv("HUB_HTTP_ADDR", ":8080"),
 		GRPCAddr:                 getenv("HUB_GRPC_ADDR", ":9090"),
-		DatabaseURL:              getenv("HUB_DATABASE_URL", "postgres://hub:hub@localhost:5432/hub?sslmode=disable"),
 		RedisAddr:                getenv("HUB_REDIS_ADDR", "localhost:6379"),
 		JWTSecret:                []byte(sec),
 		SeedEmail:                getenv("HUB_SEED_EMAIL", "admin@demo.local"),
@@ -179,6 +178,7 @@ func Load() (*Config, error) {
 		MySQLPort:                int(mustInt32("HUB_MYSQL_PORT", 3306)),
 		MySQLRootUser:            getenv("HUB_MYSQL_ROOT_USER", "root"),
 		MySQLRootPass:            os.Getenv("HUB_MYSQL_ROOT_PASSWORD"),
+		MySQLPlatformDB:          getenv("HUB_MYSQL_PLATFORM_DB", "hub_platform"),
 	}
 	return c, nil
 }

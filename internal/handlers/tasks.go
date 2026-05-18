@@ -18,10 +18,10 @@ func (a *App) TaskStatus(w http.ResponseWriter, r *http.Request) {
 	var result, payload []byte
 	var errorMsg *string
 
-	err := a.DB.QueryRow(r.Context(), `
+	err := a.DB.QueryRowContext(r.Context(), `
 		SELECT status, task_type, payload, result, error_message
-		FROM async_tasks 
-		WHERE id = $1::uuid AND workspace_id = $2::uuid`,
+		FROM async_tasks
+		WHERE id = ? AND workspace_id = ?`,
 		taskID, c.WorkspaceID).Scan(&status, &taskType, &payload, &result, &errorMsg)
 
 	if err != nil {

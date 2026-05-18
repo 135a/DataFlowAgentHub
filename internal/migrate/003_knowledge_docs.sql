@@ -1,23 +1,16 @@
--- migrate: up
--- 知识库文档元数据表（向量存储在 Chroma，此表记录文档来源与状态）
+USE hub_platform;
+
 CREATE TABLE IF NOT EXISTS knowledge_docs (
-    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id   UUID        NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    title          TEXT        NOT NULL,
-    doc_type       TEXT        NOT NULL DEFAULT 'markdown'
-                               CHECK (doc_type IN ('markdown', 'text', 'sql')),
-    content_hash   TEXT        NOT NULL,
-    chroma_doc_id  TEXT,
-    chunk_count    INT         NOT NULL DEFAULT 0,
-    status         TEXT        NOT NULL DEFAULT 'pending'
-                               CHECK (status IN ('pending', 'indexed', 'failed')),
-    created_by     UUID        REFERENCES users(id) ON DELETE SET NULL,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    id VARCHAR(36) PRIMARY KEY,
+    workspace_id VARCHAR(36) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    doc_type VARCHAR(50) NOT NULL DEFAULT 'text',
+    content_hash VARCHAR(255) DEFAULT '',
+    chroma_doc_id VARCHAR(255) DEFAULT NULL,
+    chunk_count INT NOT NULL DEFAULT 0,
+    status VARCHAR(50) NOT NULL DEFAULT 'pending',
+    created_by VARCHAR(36) DEFAULT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_knowledge_docs_workspace (workspace_id, status)
 );
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_docs_workspace
-    ON knowledge_docs (workspace_id, status);
-
--- migrate: down
-DROP TABLE IF EXISTS knowledge_docs;

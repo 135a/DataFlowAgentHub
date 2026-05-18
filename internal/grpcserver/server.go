@@ -40,11 +40,11 @@ func (s *InternalServer) TaskCallback(ctx context.Context, req *nlv1.TaskCallbac
 		resultJSON = []byte("null")
 	}
 
-	_, err := s.app.DB.Exec(ctx, `
+	_, err := s.app.DB.ExecContext(ctx, `
 		UPDATE async_tasks
-		SET status = $2, result = $3, error_message = $4, updated_at = now()
-		WHERE id = $1::uuid AND status IN ('queued', 'running')`,
-		taskID, statusStr, resultJSON, req.GetErrorMessage())
+		SET status = ?, result = ?, error_message = ?, updated_at = NOW()
+		WHERE id = ? AND status IN ('queued', 'running')`,
+		statusStr, resultJSON, req.GetErrorMessage(), taskID)
 	if err != nil {
 		s.app.Log.Error("update async task", zap.Error(err))
 		return nil, status.Error(codes.Internal, "db error")
@@ -52,7 +52,7 @@ func (s *InternalServer) TaskCallback(ctx context.Context, req *nlv1.TaskCallbac
 
 	// 更新关联的 run 状态
 	var runID *string
-	if err := s.app.DB.QueryRow(ctx, `SELECT run_id::text FROM async_tasks WHERE id = $1::uuid`, taskID).Scan(&runID); err != nil {
+	if err := s.app.DB.QueryRowContext(ctx, `SELECT run_id FROM async_tasks WHERE id = ?`, taskID).Scan(&runID); err != nil {
 		s.app.Log.Debug("task has no run_id", zap.String("task_id", taskID))
 	}
 
@@ -61,12 +61,12 @@ func (s *InternalServer) TaskCallback(ctx context.Context, req *nlv1.TaskCallbac
 		if statusStr == "failed" {
 			runStatus = "failed"
 		}
-		if _, err := s.app.DB.Exec(ctx, `UPDATE runs SET status = $2, updated_at = now() WHERE id = $1::uuid`, *runID, runStatus); err != nil {
+		if _, err := s.app.DB.ExecContext(ctx, `UPDATE runs SET status = ?, updated_at = NOW() WHERE id = ?`, runStatus, *runID); err != nil {
 			s.app.Log.Error("update run status", zap.Error(err))
 		}
 
 		var sid string
-		if err := s.app.DB.QueryRow(ctx, `SELECT session_id::text FROM runs WHERE id = $1::uuid`, *runID).Scan(&sid); err == nil {
+		if err := s.app.DB.QueryRowContext(ctx, `SELECT session_id FROM runs WHERE id = ?`, *runID).Scan(&sid); err == nil {
 			var msgContent any
 			if statusStr == "succeeded" {
 				var result any
@@ -80,7 +80,7 @@ func (s *InternalServer) TaskCallback(ctx context.Context, req *nlv1.TaskCallbac
 			msgJSON, marshalErr := json.Marshal(msgContent)
 			if marshalErr != nil {
 				s.app.Log.Warn("marshal callback message content", zap.Error(marshalErr))
-			} else if _, err := s.app.DB.Exec(ctx, `INSERT INTO messages (session_id, role, content) VALUES ($1::uuid, 'assistant', $2)`, sid, msgJSON); err != nil {
+			} else if _, err := s.app.DB.ExecContext(ctx, `INSERT INTO messages (session_id, role, content) VALUES (?, 'assistant', ?)`, sid, msgJSON); err != nil {
 				s.app.Log.Error("insert callback message", zap.Error(err))
 			}
 			s.app.Bus.Publish(sid, ssebus.Event{Type: "result", Data: msgContent})
@@ -95,20 +95,20 @@ func (s *InternalServer) RunStepCallback(ctx context.Context, req *nlv1.RunStepC
 	runID := req.GetRunId()
 
 	var stepIndex int
-	if err := s.app.DB.QueryRow(ctx, `SELECT COALESCE(MAX(step_index), -1) + 1 FROM agent_run_steps WHERE run_id = $1::uuid`, runID).Scan(&stepIndex); err != nil {
+	if err := s.app.DB.QueryRowContext(ctx, `SELECT COALESCE(MAX(step_index), -1) + 1 FROM agent_run_steps WHERE run_id = ?`, runID).Scan(&stepIndex); err != nil {
 		s.app.Log.Warn("get step index", zap.Error(err))
 	}
 
-	_, err := s.app.DB.Exec(ctx, `
+	_, err := s.app.DB.ExecContext(ctx, `
 		INSERT INTO agent_run_steps (run_id, step_index, agent_name, status, input_summary, output_summary, error_message)
-		VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		runID, stepIndex, req.GetAgentName(), req.GetStatus(), req.GetInputSummary(), req.GetOutputSummary(), req.GetErrorMessage())
 	if err != nil {
 		s.app.Log.Error("insert run step", zap.Error(err))
 	}
 
 	var sid string
-	if err := s.app.DB.QueryRow(ctx, `SELECT session_id::text FROM runs WHERE id = $1::uuid`, runID).Scan(&sid); err == nil {
+	if err := s.app.DB.QueryRowContext(ctx, `SELECT session_id FROM runs WHERE id = ?`, runID).Scan(&sid); err == nil {
 		eventData := map[string]string{
 			"agent_name": req.GetAgentName(),
 			"status":     req.GetStatus(),
@@ -131,7 +131,7 @@ func (s *InternalServer) InternalNL2SQL(ctx context.Context, req *nlv1.InternalN
 	}
 	dialect := req.GetDialect()
 	if dialect == "" {
-		dialect = "postgres"
+		dialect = "mysql"
 	}
 
 	result, err := s.app.NL2SQLExec.Execute(ctx, nl2sqlexec.Input{
@@ -173,11 +173,11 @@ func (s *InternalServer) KnowledgeDocCallback(ctx context.Context, req *nlv1.Kno
 		return nil, status.Error(codes.InvalidArgument, "invalid status, must be 'completed' or 'failed'")
 	}
 
-	_, err := s.app.DB.Exec(ctx, `
+	_, err := s.app.DB.ExecContext(ctx, `
 		UPDATE knowledge_docs
-		SET status = $2, chroma_doc_id = $3, chunk_count = $4, updated_at = now()
-		WHERE id = $1::uuid`,
-		docID, statusStr, req.GetChromaDocId(), req.GetChunkCount())
+		SET status = ?, chroma_doc_id = ?, chunk_count = ?, updated_at = NOW()
+		WHERE id = ?`,
+		statusStr, req.GetChromaDocId(), req.GetChunkCount(), docID)
 	if err != nil {
 		s.app.Log.Error("update knowledge doc", zap.Error(err))
 		return nil, status.Error(codes.Internal, "db error")

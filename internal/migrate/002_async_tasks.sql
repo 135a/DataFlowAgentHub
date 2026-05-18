@@ -1,26 +1,19 @@
--- migrate: up
--- 异步任务队列表
+USE hub_platform;
+
 CREATE TABLE IF NOT EXISTS async_tasks (
-    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id  UUID        NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    session_id    UUID        REFERENCES sessions(id) ON DELETE SET NULL,
-    run_id        UUID        REFERENCES runs(id) ON DELETE SET NULL,
-    task_type     TEXT        NOT NULL DEFAULT 'agent_pipeline',
-    status        TEXT        NOT NULL DEFAULT 'queued'
-                              CHECK (status IN ('queued','running','succeeded','failed','expired')),
-    payload       JSONB       NOT NULL DEFAULT '{}',
-    result        JSONB,
+    id VARCHAR(36) PRIMARY KEY,
+    workspace_id VARCHAR(36) NOT NULL,
+    session_id VARCHAR(36) DEFAULT NULL,
+    run_id VARCHAR(36) DEFAULT NULL,
+    task_type VARCHAR(255) NOT NULL DEFAULT 'agent_pipeline',
+    status VARCHAR(50) NOT NULL DEFAULT 'queued',
+    payload JSON DEFAULT NULL,
+    result JSON DEFAULT NULL,
     error_message TEXT,
-    nats_seq      BIGINT,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at    TIMESTAMPTZ NOT NULL DEFAULT now() + INTERVAL '2 hours'
+    nats_seq BIGINT DEFAULT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL,
+    INDEX idx_async_tasks_workspace_status (workspace_id, status),
+    INDEX idx_async_tasks_expires_at (expires_at)
 );
-
-CREATE INDEX IF NOT EXISTS idx_async_tasks_workspace_status
-    ON async_tasks (workspace_id, status);
-CREATE INDEX IF NOT EXISTS idx_async_tasks_expires_at
-    ON async_tasks (expires_at) WHERE status IN ('queued', 'running');
-
--- migrate: down
-DROP TABLE IF EXISTS async_tasks;

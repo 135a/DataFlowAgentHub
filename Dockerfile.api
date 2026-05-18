@@ -1,9 +1,15 @@
 # Build Go control plane API
 FROM golang:1.25-bookworm AS build
 WORKDIR /src
+
+# Dependency layer (cached unless go.mod/go.sum change)
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Source layer (invalidated on source changes)
 COPY . .
 ENV GOTOOLCHAIN=local
-RUN go mod tidy && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/hub-api ./cmd/api
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/hub-api ./cmd/api
 
 FROM gcr.io/distroless/base-debian12:nonroot
 WORKDIR /app
