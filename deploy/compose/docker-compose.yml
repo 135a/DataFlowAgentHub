@@ -59,6 +59,8 @@ services:
       HUB_GO_GRPC_TARGET: api:9090
       HUB_ENV: ${HUB_ENV:-development}
       LANGGRAPH_DB_PATH: /data/langgraph/checkpoints.db
+      # 报告输出目录（共享卷）
+      REPORT_OUTPUT_DIR: /data/reports
       # mTLS 证书路径
       HUB_GRPC_CA_CERT: /certs/ca.crt
       HUB_GRPC_SERVER_CERT: /certs/py-server.crt
@@ -67,6 +69,7 @@ services:
       HUB_GRPC_CLIENT_KEY: /certs/py-client.key
     volumes:
       - langgraph_data:/data/langgraph
+      - reportdata:/data/reports
       - ../../certs:/certs:ro
     expose:
       - "50051"
@@ -95,6 +98,10 @@ services:
       HUB_NATS_URL: nats://nats:4222
       HUB_DB_ENCRYPTION_KEY: ${HUB_DB_ENCRYPTION_KEY}
       HUB_ENV: ${HUB_ENV:-development}
+      # 报告目录（共享卷）
+      HUB_REPORTS_DIR: /data/reports
+      # 知识库文件存储目录
+      HUB_KNOWLEDGE_FILES_DIR: /data/knowledge-files
       # mTLS 证书路径
       HUB_GRPC_CA_CERT: /certs/ca.crt
       HUB_GRPC_SERVER_CERT: /certs/go-server.crt
@@ -105,6 +112,8 @@ services:
       - "8080:8080"
       - "9090:9090"
     volumes:
+      - reportdata:/data/reports
+      - knowledgefiles:/data/knowledge-files
       - ../../certs:/certs:ro
     depends_on:
       - postgres
@@ -129,3 +138,5 @@ volumes:
   chromadata:
   natsdata:
   langgraph_data:
+  reportdata:
+  knowledgefiles:

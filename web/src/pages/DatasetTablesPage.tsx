@@ -213,7 +213,15 @@ export function DatasetTablesPage() {
               </span>
             </div>
             {isDataAdmin && (
-              <button onClick={() => setDeleteId(t.id)} style={{ fontSize: 12, color: "crimson" }}>删除</button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Link
+                  to={`/datasets/${did}/sql-terminal?table=${t.mysql_table_name}`}
+                  style={{ fontSize: 12, color: "#1976d2", textDecoration: "none" }}
+                >
+                  SQL 终端
+                </Link>
+                <button onClick={() => setDeleteId(t.id)} style={{ fontSize: 12, color: "crimson" }}>删除</button>
+              </div>
             )}
           </div>
 

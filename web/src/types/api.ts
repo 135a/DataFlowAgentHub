@@ -227,6 +227,17 @@ export interface UpgradeRequestsResponse {
   requests: UpgradeRequest[];
 }
 
+// ── SQL Terminal ──
+export interface SqlExecuteResponse {
+  ok: boolean;
+  type: "select" | "insert" | "update";
+  columns?: string[];
+  rows?: Record<string, unknown>[];
+  total_count?: number;
+  truncated?: boolean;
+  rows_affected?: number;
+}
+
 // ── User (4-role) ──
 export interface User {
   id: string;

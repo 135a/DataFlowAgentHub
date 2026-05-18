@@ -15,6 +15,7 @@ const DatasetsPage = lazy(() => import("./pages/DatasetsPage").then(m => ({ defa
 const DatasetTablesPage = lazy(() => import("./pages/DatasetTablesPage").then(m => ({ default: m.DatasetTablesPage })));
 const UpgradeRequestPage = lazy(() => import("./pages/UpgradeRequestPage").then(m => ({ default: m.UpgradeRequestPage })));
 const UpgradeReviewPage = lazy(() => import("./pages/UpgradeReviewPage").then(m => ({ default: m.UpgradeReviewPage })));
+const SqlTerminalPage = lazy(() => import("./pages/SqlTerminalPage").then(m => ({ default: m.SqlTerminalPage })));
 
 function Root() {
   const token = localStorage.getItem("token");
@@ -56,6 +57,10 @@ function Root() {
             <Route
               path="/admin/upgrade-review"
               element={token ? <UpgradeReviewPage /> : <Navigate to="/login" replace />}
+            />
+            <Route
+              path="/datasets/:did/sql-terminal"
+              element={token ? <SqlTerminalPage /> : <Navigate to="/login" replace />}
             />
             <Route
               path="/*"

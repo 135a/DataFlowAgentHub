@@ -1,15 +1,15 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, useRef, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { apiJson } from "../api";
 import { useWorkspaceId } from "../hooks/useWorkspaceId";
-import type { KnowledgeDoc, KnowledgeDocsResponse, UploadKnowledgeResponse } from "../types/api";
+import type { KnowledgeDoc, KnowledgeDocsResponse } from "../types/api";
 
 export function KnowledgePage() {
   const token = useMemo(() => localStorage.getItem("token"), []);
   const [items, setItems] = useState<KnowledgeDoc[]>([]);
   const [status, setStatus] = useState("");
-  const [content, setContent] = useState("");
-  const [mdFileName, setMdFileName] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const workspaceId = useWorkspaceId();
 
   const load = async () => {
@@ -23,42 +23,47 @@ export function KnowledgePage() {
 
   useEffect(() => { void load(); }, [token]);
 
-  const handleMdFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setMdFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = () => {
-      setContent(String(reader.result));
-      setStatus(`已读取: ${file.name}`);
-    };
-    reader.readAsText(file);
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    setSelectedFile(file);
+    if (file) {
+      setStatus(`已选择: ${file.name}`);
+    }
   };
 
   const upload = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
-    const title = String(fd.get("title") || "");
-    const textContent = content || String(fd.get("content") || "");
-    if (!title || !textContent.trim()) {
-      setStatus("标题和内容为必填项");
+    const title = String(fd.get("title") || "").trim();
+    const file = selectedFile;
+    if (!title) {
+      setStatus("标题为必填项");
+      return;
+    }
+    if (!file) {
+      setStatus("请选择文件");
       return;
     }
     setStatus("上传中...");
     try {
-      const j = await apiJson<UploadKnowledgeResponse>(`/v1/workspaces/${workspaceId}/knowledge/docs`, {
+      const body = new FormData();
+      body.append("file", file);
+      if (title) body.append("title", title);
+
+      const j = await apiJson<any>(`/v1/workspaces/${workspaceId}/knowledge/docs/upload`, {
         method: "POST",
         token,
-        body: JSON.stringify({ title, content: textContent }),
+        body,
       });
-      setStatus(`已提交，任务 ID: ${j.task_id}`);
-      setContent("");
-      setMdFileName("");
+      setStatus(`已提交，任务 ID: ${j.task_id} (${j.doc_type})`);
+      setSelectedFile(null);
+      if (fileRef.current) fileRef.current.value = "";
       void load();
     } catch {
       setStatus("上传失败，请重试");
     }
     e.currentTarget.reset();
+    setSelectedFile(null);
   };
 
   return (
@@ -72,19 +77,15 @@ export function KnowledgePage() {
       </header>
 
       <div style={{ padding: 16, background: "#f5f5f5", borderRadius: 8, margin: "12px 0" }}>
-        <form onSubmit={upload}>
+        <form onSubmit={upload} encType="multipart/form-data">
           <div style={{ marginBottom: 8 }}>
             <label style={{ width: 80, display: "inline-block" }}>标题:</label>
             <input name="title" required style={{ width: "60%" }} />
           </div>
           <div style={{ marginBottom: 8 }}>
-            <label style={{ width: 80, display: "inline-block", verticalAlign: "top" }}>内容:</label>
-            <textarea name="content" rows={5} style={{ width: "60%" }} value={content} onChange={e => setContent(e.target.value)} />
-          </div>
-          <div style={{ marginBottom: 8 }}>
-            <label style={{ width: 80, display: "inline-block" }}>.md 文件:</label>
-            <input type="file" accept=".md,.txt,.markdown" onChange={handleMdFile} />
-            {mdFileName && <span style={{ marginLeft: 8, fontSize: 12, color: "#888" }}>{mdFileName}</span>}
+            <label style={{ width: 80, display: "inline-block" }}>文件:</label>
+            <input ref={fileRef} type="file" name="file" required accept=".txt,.doc,.docx,.pdf" onChange={handleFileChange} />
+            {selectedFile && <span style={{ marginLeft: 8, fontSize: 12, color: "#888" }}>{selectedFile.name}</span>}
           </div>
           <button type="submit">上传</button>
           {status && <span style={{ marginLeft: 12, fontSize: 13 }}>{status}</span>}

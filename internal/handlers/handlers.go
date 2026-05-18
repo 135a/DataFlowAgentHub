@@ -922,7 +922,9 @@ func Routes(a *App) http.Handler {
 
 		// 知识文档相关路由
 		r.With(middleware.RequireMinRole("data_admin")).Get("/workspaces/{workspaceID}/knowledge/docs", a.ListKnowledgeDocs)   // 获取知识文档列表
-		r.With(middleware.RequireMinRole("data_admin")).Post("/workspaces/{workspaceID}/knowledge/docs", a.UploadKnowledgeDoc) // 上传知识文档
+		r.With(middleware.RequireMinRole("data_admin")).Post("/workspaces/{workspaceID}/knowledge/docs", a.UploadKnowledgeDoc)          // 上传知识文档（JSON body，内部使用）
+		r.With(middleware.RequireMinRole("data_admin")).Post("/workspaces/{workspaceID}/knowledge/docs/upload", a.UploadKnowledgeDocFromFile) // 上传知识文档（multipart 文件）
+		r.Get("/knowledge/docs/{docID}/download", a.DownloadKnowledgeDoc)      // 下载知识库原始文件
 
 		// 任务和运行相关路由
 		r.Get("/runs/{runID}/report", a.DownloadReport) // 下载运行报告
@@ -930,6 +932,7 @@ func Routes(a *App) http.Handler {
 
 		// 数据管理路由
 		r.With(middleware.RequireMinRole("normal_user")).Post("/data/upload", a.UploadData) // 文件上传导入
+		r.With(middleware.RequireMinRole("data_admin")).Post("/data/execute", a.ExecuteDataSQL) // SQL 终端执行
 
 		// ====== 数据集管理路由 ======
 		r.Get("/datasets", a.ListDatasets)                                                    // 列出数据集

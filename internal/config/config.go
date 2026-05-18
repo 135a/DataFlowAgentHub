@@ -32,6 +32,7 @@ type Config struct {
 	SchemaMaxColumnsPerTable int32
 	DBEncryptionKey          string
 	ReportsDir               string
+	KnowledgeFilesDir        string
 	OTelExporterEndpoint     string
 	Env                      string
 	NATSURL                  string
@@ -164,6 +165,7 @@ func Load() (*Config, error) {
 		SchemaMaxColumnsPerTable: mustInt32("HUB_SCHEMA_MAX_COLUMNS_PER_TABLE", 100),
 		DBEncryptionKey:          dbEncKey,
 		ReportsDir:               getenv("HUB_REPORTS_DIR", os.TempDir()+"/hub-reports/"),
+		KnowledgeFilesDir:        getenv("HUB_KNOWLEDGE_FILES_DIR", "/data/knowledge-files"),
 		OTelExporterEndpoint:     os.Getenv("HUB_OTEL_EXPORTER_ENDPOINT"),
 		Env:                      getenv("HUB_ENV", "development"),
 		NATSURL:                  getenv("HUB_NATS_URL", "nats://localhost:4222"),
