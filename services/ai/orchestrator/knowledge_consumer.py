@@ -4,20 +4,9 @@ import logging
 import os
 from nats.aio.client import Client as NATS
 from rag.knowledge_base import KnowledgeBase
-from hub_ai.internal_client import HubInternalClient
+from hub_ai._client import get_client
 
 logger = logging.getLogger(__name__)
-
-
-# 全局 gRPC 客户端（惰性初始化）
-_internal_client: HubInternalClient | None = None
-
-
-def _get_internal_client() -> HubInternalClient:
-    global _internal_client
-    if _internal_client is None:
-        _internal_client = HubInternalClient()
-    return _internal_client
 
 
 async def process_knowledge_message(msg):
@@ -33,7 +22,7 @@ async def process_knowledge_message(msg):
         title = payload.get("title", "")
         content = payload.get("content", "")
 
-        logger.info(f"Indexing document {doc_id} in workspace {workspace_id}")
+        logger.info("Indexing document %s in workspace %s", doc_id, workspace_id)
 
         if not content or not workspace_id:
             logger.error("Missing content or workspace_id, skipping")
@@ -46,56 +35,69 @@ async def process_knowledge_message(msg):
         # 分块和嵌入，获取 Chroma doc ID
         chroma_doc_id = kb.add_document(doc_id=doc_id, title=title, text_content=content)
 
-        # 通过 gRPC 回调 Go API：成功
-        chunk_count = 0  # kb.add_document may not return a count; try to extract
-        client = _get_internal_client()
-        await asyncio.to_thread(
-            client.knowledge_doc_callback,
+        # 通过 gRPC 回调 Go API：成功（异步，无需 to_thread）
+        client = await get_client()
+        await client.knowledge_doc_callback(
             doc_id=doc_id,
             status="completed",
             chroma_doc_id=chroma_doc_id,
-            chunk_count=chunk_count,
+            chunk_count=0,
         )
-        logger.info(f"Document {doc_id} indexed successfully via gRPC")
+        logger.info("Document %s indexed successfully via gRPC", doc_id)
         await msg.ack()
 
     except Exception as e:
-        logger.error(f"Knowledge indexing failed for {doc_id}: {e}", exc_info=True)
+        logger.error("Knowledge indexing failed for %s: %s", doc_id, e, exc_info=True)
         if doc_id:
             try:
-                client = _get_internal_client()
-                await asyncio.to_thread(
-                    client.knowledge_doc_callback,
+                client = await get_client()
+                await client.knowledge_doc_callback(
                     doc_id=doc_id,
                     status="failed",
                     chunk_count=0,
                 )
             except Exception as cb_err:
-                logger.error(f"Failed to send failure callback via gRPC: {cb_err}")
+                logger.error("Failed to send failure callback via gRPC: %s", cb_err)
         try:
             await msg.nak()
         except Exception:
             pass
 
 
-async def run_knowledge_consumer():
-    nc = NATS()
-    nats_url = os.environ.get("NATS_URL", "nats://localhost:4222")
+async def run_knowledge_consumer(nats_url=None):
+    max_retries = 5
+    retry_delay = 1
+    nats_url = nats_url or os.environ.get("NATS_URL", "nats://localhost:4222")
 
-    try:
-        await nc.connect(nats_url)
-        logger.info(f"Knowledge consumer connected to NATS at {nats_url}")
+    for attempt in range(max_retries):
+        nc = NATS()
+        try:
+            await nc.connect(nats_url)
+            logger.info("Knowledge consumer connected to NATS at %s", nats_url)
 
-        await nc.subscribe("hub.tasks.knowledge_index", cb=process_knowledge_message)
+            await nc.subscribe("hub.tasks.knowledge_index", cb=process_knowledge_message)
+            logger.info("Subscribed to hub.tasks.knowledge_index")
 
-        while True:
-            await asyncio.sleep(1)
+            await asyncio.Future()  # 保持运行
 
-    except Exception as e:
-        logger.error(f"Knowledge consumer NATS error: {e}")
-    finally:
-        if nc.is_connected:
-            await nc.drain()
+        except asyncio.CancelledError:
+            logger.info("Knowledge NATS consumer cancelled")
+            if nc.is_connected:
+                await nc.drain()
+            break
+        except Exception as e:
+            logger.error(
+                "Knowledge NATS connection attempt %d/%d failed: %s",
+                attempt + 1, max_retries, e,
+            )
+            if nc.is_connected:
+                await nc.drain()
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 30)  # 指数退避
+            else:
+                logger.error("All Knowledge NATS reconnection attempts exhausted, giving up")
+                raise
 
 
 if __name__ == "__main__":

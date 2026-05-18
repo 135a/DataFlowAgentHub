@@ -8,19 +8,18 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
-	httpRequests = promauto.NewCounterVec(
+	httpRequests = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "hub_http_requests_total",
 			Help: "Total HTTP requests",
 		},
 		[]string{"code", "method", "path"},
 	)
-	httpDuration = promauto.NewHistogramVec(
+	httpDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "hub_http_request_duration_seconds",
 			Help:    "HTTP request duration",
@@ -28,20 +27,24 @@ var (
 		},
 		[]string{"method", "path"},
 	)
-	nl2sqlDuration = promauto.NewHistogram(
+	nl2sqlDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Name:    "hub_nl2sql_duration_seconds",
 			Help:    "NL2SQL gRPC call duration in seconds",
 			Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30},
 		},
 	)
-	agentPipelineTasks = promauto.NewCounter(
+	agentPipelineTasks = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "hub_agent_pipeline_tasks_total",
 			Help: "Total number of agent pipeline tasks submitted",
 		},
 	)
 )
+
+func init() {
+	prometheus.MustRegister(httpRequests, httpDuration, nl2sqlDuration, agentPipelineTasks)
+}
 
 // NL2SQLDuration 返回 NL2SQL 调用时长追踪的直方图
 func NL2SQLDuration() prometheus.Histogram {

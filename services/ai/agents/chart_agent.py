@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 import os
 import numpy as np
@@ -14,8 +15,8 @@ logger = logging.getLogger(__name__)
 # 最大数据点数（超过则采样）
 MAX_CHART_POINTS = 50
 
-# 图表输出目录
-CHART_OUTPUT_DIR = "/tmp/reports"
+# 图表输出目录（环境变量化）
+CHART_OUTPUT_DIR = os.getenv("CHART_OUTPUT_DIR", "/tmp/reports")
 
 
 def _sample_dataframe(df: pd.DataFrame, max_rows: int = MAX_CHART_POINTS) -> pd.DataFrame:

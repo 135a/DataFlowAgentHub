@@ -1,69 +1,56 @@
-import type { CSSProperties } from "react";
+import styles from "./ModeSelector.module.css";
 
 interface ModeSelectorProps {
   mode: "quick" | "deep";
   onChange: (mode: "quick" | "deep") => void;
 }
 
-const QUICK = "#2563EB";
-const DEEP = "#7C3AED";
-
 function ModeButton({
   selected,
-  color,
+  isQuick,
   label,
   sub,
   onClick,
 }: {
   selected: boolean;
-  color: string;
+  isQuick: boolean;
   label: string;
   sub: string;
   onClick: () => void;
 }) {
-  const style: CSSProperties = {
-    padding: "6px 18px",
-    fontSize: 14,
-    fontWeight: 500,
-    borderRadius: 20,
-    cursor: "pointer",
-    border: `1.5px solid ${color}`,
-    background: selected ? color : "transparent",
-    color: selected ? "#fff" : color,
-    transition: "all 0.15s ease",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    lineHeight: 1.4,
-    outline: "none",
-  };
+  const borderClass = isQuick ? styles.buttonQuick : styles.buttonDeep;
+  const activeClass = selected
+    ? (isQuick ? styles.buttonActiveQuick : styles.buttonActiveDeep)
+    : (isQuick ? styles.buttonInactiveQuick : styles.buttonInactiveDeep);
+  const stateClass = selected ? styles.buttonActive : styles.buttonInactive;
+
   return (
-    <button type="button" style={style} onClick={onClick}>
+    <button
+      type="button"
+      className={`${styles.button} ${borderClass} ${stateClass} ${activeClass}`}
+      onClick={onClick}
+    >
       <span>{label}</span>
-      <span style={{ fontSize: 10, opacity: selected ? 0.9 : 0.65 }}>{sub}</span>
+      <span className={`${styles.subText} ${selected ? styles.subTextActive : ""}`}>
+        {sub}
+      </span>
     </button>
   );
 }
 
 export function ModeSelector({ mode, onChange }: ModeSelectorProps) {
-  const container: CSSProperties = {
-    display: "flex",
-    gap: 10,
-    marginBottom: 8,
-    flexWrap: "wrap",
-  };
   return (
-    <div style={container}>
+    <div className={styles.container}>
       <ModeButton
         selected={mode === "quick"}
-        color={QUICK}
+        isQuick={true}
         label="⚡ 快速查询"
         sub="秒出 SQL 结果"
         onClick={() => onChange("quick")}
       />
       <ModeButton
         selected={mode === "deep"}
-        color={DEEP}
+        isQuick={false}
         label="🔬 深度分析"
         sub="图表 + 报告 + 分析"
         onClick={() => onChange("deep")}

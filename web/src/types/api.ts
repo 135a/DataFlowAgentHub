@@ -46,7 +46,7 @@ export interface RunStep {
   error_message?: string;
 }
 
-// ── Data Source ──
+// ── Data Source (legacy) ──
 export interface DataSource {
   id: string;
   name: string;
@@ -76,7 +76,7 @@ export interface SSETokenResponse {
   sse_token: string;
 }
 
-// ── API Response Wrappers ──
+// ── API Response Wrappers (legacy) ──
 export interface SessionsResponse {
   sessions: Session[];
 }
@@ -109,7 +109,7 @@ export interface PostMessageResponse {
   task_id: string;
 }
 
-// ── Data Management ──
+// ── Data Management (legacy) ──
 export interface UploadDataResponse {
   ok?: boolean;
   rows_affected?: number;
@@ -133,4 +133,109 @@ export interface CreateTableResponse {
 
 export interface TableListResponse {
   tables: { name: string }[];
+}
+
+// ── Dataset (v2) ──
+export interface Dataset {
+  id: string;
+  name: string;
+  mysql_database: string;
+  status: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DatasetsResponse {
+  datasets: Dataset[];
+}
+
+export interface CreateDatasetResponse {
+  id: string;
+  name: string;
+  mysql_database: string;
+}
+
+// ── Dataset Table (v2) ──
+export interface DatasetTable {
+  id: string;
+  dataset_id: string;
+  name: string;
+  display_name?: string;
+  mysql_table_name: string;
+  status: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DatasetTablesResponse {
+  tables: DatasetTable[];
+}
+
+export interface CreateTableResponseV2 {
+  id: string;
+  name: string;
+  mysql_table_name: string;
+  fields_count: number;
+}
+
+// ── Table Field (v2) ──
+export interface TableField {
+  id: string;
+  table_id: string;
+  name: string;
+  display_name?: string;
+  field_type: string;
+  field_length: number;
+  is_nullable: boolean;
+  ordinal_position: number;
+}
+
+export interface TableDetailResponse {
+  table: DatasetTable;
+  fields: TableField[];
+}
+
+export interface FieldsResponse {
+  fields: TableField[];
+}
+
+// ── Permission ──
+export interface PermissionGrantRequest {
+  user_id: string;
+  permission_level: string;
+}
+
+export interface PermissionRevokeRequest {
+  user_id: string;
+}
+
+// ── Upgrade Request ──
+export interface UpgradeRequest {
+  id: string;
+  user_id: string;
+  user_name: string;
+  user_phone: string;
+  requested_role: string;
+  reason: string;
+  status: string;
+  created_at: string;
+}
+
+export interface UpgradeRequestsResponse {
+  requests: UpgradeRequest[];
+}
+
+// ── User (4-role) ──
+export interface User {
+  id: string;
+  name: string;
+  phone: string;
+  role: string;
+  created_at: string;
+}
+
+export interface UsersResponse {
+  users: User[];
 }

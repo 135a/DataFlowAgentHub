@@ -1,0 +1,66 @@
+.container {
+  font-family: system-ui;
+  padding: 16px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.headerTitle {
+  margin: 0;
+}
+
+.nav {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.navLink {
+  font-size: 14px;
+}
+
+.inputRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.textInput {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 14px;
+}
+
+.sendButton {
+  padding: 6px 16px;
+}
+
+.messagesContainer {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.statusText {
+  font-size: 13px;
+  margin: 8px 0 0;
+}
+
+.statusError {
+  color: #dc2626;
+}
+
+.statusInfo {
+  color: #444;
+}
+
+.statusHint {
+  color: #6b7280;
+}

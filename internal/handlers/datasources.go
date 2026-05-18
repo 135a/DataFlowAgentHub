@@ -57,6 +57,9 @@ func (a *App) ListDataSources(w http.ResponseWriter, r *http.Request) {
 			"created_at": created.UTC().Format(time.RFC3339),
 		})
 	}
+	if err := rows.Err(); err != nil {
+		a.Log.Warn("list data sources rows iteration", zap.Error(err))
+	}
 	JSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
@@ -189,7 +192,7 @@ func (a *App) UpdateDataSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		errJSON(w, http.StatusNotFound, "数据源不存在")
+		errJSON(w, http.StatusNotFound, "data source not found")
 		return
 	}
 	JSON(w, http.StatusOK, map[string]any{"message": "ok"})
@@ -212,7 +215,7 @@ func (a *App) DeleteDataSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		errJSON(w, http.StatusNotFound, "数据源不存在")
+		errJSON(w, http.StatusNotFound, "data source not found")
 		return
 	}
 	JSON(w, http.StatusOK, map[string]any{"message": "ok"})

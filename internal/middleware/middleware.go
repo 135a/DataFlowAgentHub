@@ -5,12 +5,12 @@ import (
 	"net/http"
 	"strings"
 
-	"go.opentelemetry.io/otel/trace"
-
 	"github.com/dataflowagenthub/hub/internal/auth"
 	"github.com/dataflowagenthub/hub/internal/config"
+	"github.com/dataflowagenthub/hub/internal/rbac"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -93,7 +93,7 @@ func ClaimsFromContext(ctx context.Context) *auth.Claims {
 
 // RequireMinRole 如果角色权限低于要求则返回 403（admin > operator > viewer）
 func RequireMinRole(min string) func(http.Handler) http.Handler {
-	order := map[string]int{"viewer": 1, "operator": 2, "admin": 3}
+	isAllowed := rbac.MinRole(min)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			c := ClaimsFromContext(r.Context())
@@ -101,7 +101,7 @@ func RequireMinRole(min string) func(http.Handler) http.Handler {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			if order[c.Role] < order[min] {
+			if !isAllowed(c.Role) {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}

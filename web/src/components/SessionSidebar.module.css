@@ -1,0 +1,28 @@
+.sidebar {
+  margin-top: 16px;
+}
+
+.heading {
+}
+
+.createBtn {
+}
+
+.sessionList {
+  list-style: none;
+  padding: 0;
+}
+
+.sessionItem {
+}
+
+.sessionBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.sessionBtnBold {
+  font-weight: bold;
+}

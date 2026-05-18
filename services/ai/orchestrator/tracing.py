@@ -1,23 +1,32 @@
+"""Tracing helpers for reporting LangGraph step progress to the Go backend.
+
+``report_run_step`` is a synchronous convenience that obtains the global
+HubInternalClient singleton and calls ``run_step_callback_sync``.
+"""
+
+from __future__ import annotations
 import logging
-from hub_ai.internal_client import HubInternalClient
 
 logger = logging.getLogger(__name__)
 
-# 全局 gRPC 客户端（惰性初始化）
-_internal_client: HubInternalClient | None = None
 
+def report_run_step(
+    run_id: str,
+    agent_name: str,
+    status: str,
+    input_summary: str = "",
+    output_summary: str = "",
+    error_message: str = "",
+) -> None:
+    """Report a LangGraph agent step to Go API (synchronous).
 
-def _get_internal_client() -> HubInternalClient:
-    global _internal_client
-    if _internal_client is None:
-        _internal_client = HubInternalClient()
-    return _internal_client
-
-
-def report_run_step(run_id: str, agent_name: str, status: str, input_summary: str = "", output_summary: str = "", error_message: str = ""):
+    Uses the sync gRPC stub (created at HubInternalClient construction)
+    so this function is safe to call from LangGraph sync node functions.
+    """
     try:
-        client = _get_internal_client()
-        client.run_step_callback(
+        from hub_ai._client import get_client_sync
+        client = get_client_sync()
+        client.run_step_callback_sync(
             run_id=run_id,
             agent_name=agent_name,
             status=status,
@@ -26,4 +35,4 @@ def report_run_step(run_id: str, agent_name: str, status: str, input_summary: st
             error_message=error_message,
         )
     except Exception as e:
-        logger.warning(f"Failed to report run step via gRPC: {e}")
+        logger.warning("Failed to report run step via gRPC: %s", e)

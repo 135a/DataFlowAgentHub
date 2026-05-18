@@ -1,3 +1,5 @@
+from __future__ import annotations
+import asyncio
 import json
 import logging
 import os
@@ -9,7 +11,7 @@ from opentelemetry import trace
 
 from orchestrator.state import AgentState
 from orchestrator.tracing import report_run_step
-from hub_ai.internal_client import HubInternalClient
+from hub_ai._client import get_client_sync
 from agents.data_analysis_agent import data_analysis_node
 from agents.report_generation_agent import report_generation_node
 from agents.chart_agent import chart_agent_node
@@ -17,59 +19,78 @@ from agents.chart_agent import chart_agent_node
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
-# 全局 gRPC 客户端（惰性初始化）
-_internal_client: HubInternalClient | None = None
-
-
-def _get_internal_client() -> HubInternalClient:
-    global _internal_client
-    if _internal_client is None:
-        _internal_client = HubInternalClient()
-    return _internal_client
-
 
 def nl2sql_node(state: AgentState) -> dict:
-    """通过 gRPC 调用 Go API 的 InternalNL2SQL 执行 NL2SQL。"""
+    """通过 gRPC 调用 Go API 的 InternalNL2SQL 执行 NL2SQL。
+
+    同步函数，因为在 LangGraph invoke 中运行（同步线程池）。
+    执行完成后会尝试 RAG 知识检索，结果写入 rag_context。
+    """
     with tracer.start_as_current_span("nl2sql_node"):
         run_id = state.get("run_id", "")
         report_run_step(run_id, "nl2sql_agent", "running", "Calling NL2SQL via Go API gRPC")
 
         user_input = state.get("user_input", "")
         schema_context = state.get("schema_context", "{}")
+        result: dict = {}
 
         try:
-            client = _get_internal_client()
-            result = client.internal_nl2sql(
+            client = get_client_sync()
+            nl2sql_result = client.internal_nl2sql_sync(
                 user_message=user_input,
                 schema_json=schema_context,
                 dialect="postgres",
             )
 
-            if not result.get("ok", True):
-                error_msg = result.get("error_message", "unknown error")
-                logger.error(f"NL2SQL via gRPC failed: {error_msg}")
+            if not nl2sql_result.get("ok", True):
+                error_msg = nl2sql_result.get("error_message", "unknown error")
+                logger.error("NL2SQL via gRPC failed: %s", error_msg)
                 report_run_step(
                     run_id, "nl2sql_agent", "failed",
                     error_message=error_msg,
                 )
-                return {"nl2sql_error": error_msg}
-
-            rows = result.get("rows", [])
-            sql = result.get("sql", "")
-            logger.info(f"NL2SQL returned {len(rows)} rows, SQL: {sql[:200]}")
-            report_run_step(
-                run_id, "nl2sql_agent", "succeeded",
-                output_summary=f"Generated SQL, returned {len(rows)} rows",
-            )
-            return {"nl2sql_result": rows, "nl2sql_sql": sql}
+                result["nl2sql_error"] = error_msg
+            else:
+                rows = nl2sql_result.get("rows", [])
+                sql = nl2sql_result.get("sql", "")
+                logger.info("NL2SQL returned %d rows, SQL: %s", len(rows), sql[:200])
+                report_run_step(
+                    run_id, "nl2sql_agent", "succeeded",
+                    output_summary=f"Generated SQL, returned {len(rows)} rows",
+                )
+                result["nl2sql_result"] = rows
+                result["nl2sql_sql"] = sql
 
         except Exception as e:
-            logger.error(f"NL2SQL node failed: {e}")
+            logger.error("NL2SQL node failed: %s", e)
             report_run_step(
                 run_id, "nl2sql_agent", "failed",
                 error_message=str(e),
             )
-            return {"nl2sql_error": str(e)}
+            result["nl2sql_error"] = str(e)
+
+        # ------------------------------------------------------------------
+        # RAG 知识检索：填充 rag_context 供下游 agent 使用
+        # ------------------------------------------------------------------
+        workspace_id = state.get("workspace_id")
+        if workspace_id and not state.get("rag_context"):
+            try:
+                from rag.knowledge_base import KnowledgeBase
+                kb = KnowledgeBase(workspace_id)
+                rag_snippets = kb.search(user_input, top_k=3)
+                if rag_snippets and isinstance(rag_snippets, list):
+                    context_parts = []
+                    for i, snippet in enumerate(rag_snippets):
+                        content = snippet.get("content", "")
+                        if content:
+                            context_parts.append(f"[{i+1}] {content}")
+                    if context_parts:
+                        result["rag_context"] = "\n".join(context_parts)
+                        logger.info("RAG context added: %d documents", len(context_parts))
+            except Exception as e:
+                logger.warning("RAG search failed (non-blocking): %s", e)
+
+        return result
 
 
 def route_next(state: AgentState) -> Literal["analysis_node", "chart_node", "report_node", "__end__"]:
@@ -130,8 +151,12 @@ def build_graph():
     builder.add_conditional_edges("chart_node", route_after_chart)
     builder.add_edge("report_node", END)
 
+    # 环境变量化 + :memory: 特殊处理
     db_path = os.getenv("LANGGRAPH_DB_PATH", "/data/langgraph/checkpoints.db")
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    if db_path != ":memory:":
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    else:
+        db_path = ":memory:"
     checkpointer = SqliteSaver.from_conn_string(db_path)
     graph = builder.compile(checkpointer=checkpointer)
     return graph

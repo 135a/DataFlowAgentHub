@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/dataflowagenthub/hub/internal/middleware"
-	"github.com/dataflowagenthub/hub/internal/ratelimit"
 	"github.com/dataflowagenthub/hub/internal/seed"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -23,18 +21,19 @@ type RegisterRequest struct {
 	Role     string `json:"role"`
 }
 
-// Register admin 创建新用户（仅 admin 可调用）
+// 有效的角色列表
+var validRoles = map[string]bool{
+	"super_admin":        true,
+	"data_admin":         true,
+	"normal_user":        true,
+	"read_only_visitor":  true,
+}
+
+// Register super_admin 创建新用户（仅 super_admin 可调用）
 func (a *App) Register(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
-	// 限流：每用户每分钟 10 次
-	if c != nil {
-		if ok, _ := ratelimit.Allow(r.Context(), a.Redis, "register:"+c.UserID, 10, time.Minute, a.Cfg.RateLimitFailClosed); !ok {
-			errJSON(w, http.StatusTooManyRequests, "rate limit")
-			return
-		}
-	}
-	if c == nil || c.Role != "admin" {
-		errJSON(w, http.StatusForbidden, "仅 admin 可创建用户")
+	if c == nil || c.Role != "super_admin" {
+		errJSON(w, http.StatusForbidden, "only super_admin can create users")
 		return
 	}
 
@@ -48,11 +47,11 @@ func (a *App) Register(w http.ResponseWriter, r *http.Request) {
 	body.Role = strings.ToLower(strings.TrimSpace(body.Role))
 
 	if body.Phone == "" || body.Name == "" || body.Password == "" {
-		errJSON(w, http.StatusBadRequest, "姓名、手机号、密码为必填项")
+		errJSON(w, http.StatusBadRequest, "name, phone, and password are required")
 		return
 	}
-	if body.Role != "operator" && body.Role != "viewer" {
-		errJSON(w, http.StatusBadRequest, "角色必须为 operator 或 viewer")
+	if body.Role != "data_admin" && body.Role != "read_only_visitor" {
+		errJSON(w, http.StatusBadRequest, "role must be data_admin or read_only_visitor")
 		return
 	}
 
@@ -63,7 +62,7 @@ func (a *App) Register(w http.ResponseWriter, r *http.Request) {
 		a.Log.Warn("check phone exists", zap.Error(err))
 	}
 	if exists > 0 {
-		errJSON(w, http.StatusConflict, "手机号已存在")
+		errJSON(w, http.StatusConflict, "phone number already exists")
 		return
 	}
 
@@ -75,7 +74,6 @@ func (a *App) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := uuid.NewString()
-	// email 列不可为 NULL，为手机号用户生成占位邮箱
 	placeholderEmail := body.Phone + "@phone.local"
 	_, err = a.DB.Exec(r.Context(), `
 		INSERT INTO users (id, workspace_id, name, phone, email, password_hash, role)
@@ -83,7 +81,7 @@ func (a *App) Register(w http.ResponseWriter, r *http.Request) {
 		id, seed.DemoWorkspaceID(), body.Name, body.Phone, placeholderEmail, string(hash), body.Role)
 	if err != nil {
 		a.Log.Error("insert user", zap.Error(err))
-		errJSON(w, http.StatusInternalServerError, "创建用户失败")
+		errJSON(w, http.StatusInternalServerError, "failed to create user")
 		return
 	}
 
@@ -94,11 +92,67 @@ func (a *App) Register(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListUsers 返回用户列表（仅 admin）
+// SelfRegister 前端开放注册，仅允许注册为 normal_user
+func (a *App) SelfRegister(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name     string `json:"name"`
+		Phone    string `json:"phone"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	body.Phone = strings.TrimSpace(body.Phone)
+	body.Name = strings.TrimSpace(body.Name)
+	if body.Phone == "" || body.Name == "" || body.Password == "" {
+		errJSON(w, http.StatusBadRequest, "name, phone, and password are required")
+		return
+	}
+
+	// 检查手机号是否已存在
+	var exists int
+	if err := a.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM users WHERE workspace_id = $1 AND phone = $2`,
+		seed.DemoWorkspaceID(), body.Phone).Scan(&exists); err != nil {
+		a.Log.Warn("check phone exists", zap.Error(err))
+	}
+	if exists > 0 {
+		errJSON(w, http.StatusConflict, "phone number already exists")
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
+	if err != nil {
+		a.Log.Error("bcrypt hash", zap.Error(err))
+		errJSON(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	id := uuid.NewString()
+	placeholderEmail := body.Phone + "@phone.local"
+	_, err = a.DB.Exec(r.Context(), `
+		INSERT INTO users (id, workspace_id, name, phone, email, password_hash, role)
+		VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, 'normal_user')`,
+		id, seed.DemoWorkspaceID(), body.Name, body.Phone, placeholderEmail, string(hash))
+	if err != nil {
+		a.Log.Error("insert user", zap.Error(err))
+		errJSON(w, http.StatusInternalServerError, "failed to register")
+		return
+	}
+
+	JSON(w, http.StatusCreated, map[string]any{
+		"id":   id,
+		"name": body.Name,
+		"role": "normal_user",
+		"message": "registration successful, please login",
+	})
+}
+
+// ListUsers 返回用户列表（仅 super_admin）
 func (a *App) ListUsers(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
-	if c == nil || c.Role != "admin" {
-		errJSON(w, http.StatusForbidden, "仅 admin 可查看用户列表")
+	if c == nil || c.Role != "super_admin" {
+		errJSON(w, http.StatusForbidden, "only super_admin can list users")
 		return
 	}
 
@@ -117,7 +171,6 @@ func (a *App) ListUsers(w http.ResponseWriter, r *http.Request) {
 		var id, name, phone, role string
 		var createdAt interface{}
 
-		// phone 可能为 NULL
 		var phonePtr *string
 		if err := rows.Scan(&id, &name, &phonePtr, &role, &createdAt); err != nil {
 			errJSON(w, http.StatusInternalServerError, "db scan error")
@@ -135,15 +188,18 @@ func (a *App) ListUsers(w http.ResponseWriter, r *http.Request) {
 			"created_at": createdAt,
 		})
 	}
+	if err := rows.Err(); err != nil {
+		a.Log.Warn("list users rows iteration", zap.Error(err))
+	}
 
 	JSON(w, http.StatusOK, map[string]any{"users": users})
 }
 
-// ChangeUserRole admin 修改用户角色（仅 admin）
+// ChangeUserRole super_admin 修改用户角色（仅 super_admin，不能改 super_admin）
 func (a *App) ChangeUserRole(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
-	if c == nil || c.Role != "admin" {
-		errJSON(w, http.StatusForbidden, "仅 admin 可修改用户角色")
+	if c == nil || c.Role != "super_admin" {
+		errJSON(w, http.StatusForbidden, "only super_admin can change user role")
 		return
 	}
 
@@ -153,7 +209,7 @@ func (a *App) ChangeUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if userID == c.UserID {
-		errJSON(w, http.StatusBadRequest, "不能修改自己的角色")
+		errJSON(w, http.StatusBadRequest, "cannot change your own role")
 		return
 	}
 
@@ -165,21 +221,20 @@ func (a *App) ChangeUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Role = strings.ToLower(strings.TrimSpace(body.Role))
-	if body.Role != "operator" && body.Role != "viewer" && body.Role != "admin" {
-		errJSON(w, http.StatusBadRequest, "角色必须为 admin/operator/viewer")
+	if !validRoles[body.Role] {
+		errJSON(w, http.StatusBadRequest, "role must be one of: super_admin, data_admin, normal_user, read_only_visitor")
 		return
 	}
 
-	// 检查目标用户是否为 admin（不能修改其他 admin）
 	var targetRole string
 	err := a.DB.QueryRow(r.Context(), `SELECT role FROM users WHERE id = $1::uuid AND workspace_id = $2::uuid`,
 		userID, seed.DemoWorkspaceID()).Scan(&targetRole)
 	if err != nil {
-		errJSON(w, http.StatusNotFound, "用户不存在")
+		errJSON(w, http.StatusNotFound, "user not found")
 		return
 	}
-	if targetRole == "admin" {
-		errJSON(w, http.StatusBadRequest, "不能修改 admin 用户的角色")
+	if targetRole == "super_admin" {
+		errJSON(w, http.StatusBadRequest, "cannot change role of a super_admin user")
 		return
 	}
 
@@ -192,11 +247,11 @@ func (a *App) ChangeUserRole(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]any{"message": "ok"})
 }
 
-// DeleteUser admin 删除用户（仅 admin，不能删自己，不能删 admin）
+// DeleteUser super_admin 删除用户（仅 super_admin，不能删自己，不能删 super_admin）
 func (a *App) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
-	if c == nil || c.Role != "admin" {
-		errJSON(w, http.StatusForbidden, "仅 admin 可删除用户")
+	if c == nil || c.Role != "super_admin" {
+		errJSON(w, http.StatusForbidden, "only super_admin can delete users")
 		return
 	}
 
@@ -206,20 +261,19 @@ func (a *App) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if userID == c.UserID {
-		errJSON(w, http.StatusBadRequest, "不能删除自己")
+		errJSON(w, http.StatusBadRequest, "cannot delete yourself")
 		return
 	}
 
-	// 检查目标用户是否为 admin
 	var targetRole string
 	err := a.DB.QueryRow(r.Context(), `SELECT role FROM users WHERE id = $1::uuid AND workspace_id = $2::uuid`,
 		userID, seed.DemoWorkspaceID()).Scan(&targetRole)
 	if err != nil {
-		errJSON(w, http.StatusNotFound, "用户不存在")
+		errJSON(w, http.StatusNotFound, "user not found")
 		return
 	}
-	if targetRole == "admin" {
-		errJSON(w, http.StatusBadRequest, "不能删除 admin 用户")
+	if targetRole == "super_admin" {
+		errJSON(w, http.StatusBadRequest, "cannot delete a super_admin user")
 		return
 	}
 
@@ -233,3 +287,155 @@ func (a *App) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]any{"message": "ok"})
 }
 
+// CreateUpgradeRequest normal_user 提交权限升级申请
+func (a *App) CreateUpgradeRequest(w http.ResponseWriter, r *http.Request) {
+	c := middleware.ClaimsFromContext(r.Context())
+	if c == nil {
+		errJSON(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var body struct {
+		RequestedRole string `json:"requested_role"`
+		Reason        string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	body.RequestedRole = strings.ToLower(strings.TrimSpace(body.RequestedRole))
+	if body.RequestedRole != "data_admin" && body.RequestedRole != "read_only_visitor" {
+		errJSON(w, http.StatusBadRequest, "requested_role must be data_admin or read_only_visitor")
+		return
+	}
+
+	id := uuid.NewString()
+	_, err := a.DB.Exec(r.Context(), `
+		INSERT INTO permission_requests (id, user_id, requested_role, reason)
+		VALUES ($1::uuid, $2::uuid, $3, $4)`,
+		id, c.UserID, body.RequestedRole, body.Reason)
+	if err != nil {
+		a.Log.Error("create upgrade request", zap.Error(err))
+		errJSON(w, http.StatusInternalServerError, "failed to create request")
+		return
+	}
+
+	JSON(w, http.StatusCreated, map[string]any{"id": id, "status": "pending"})
+}
+
+// ListUpgradeRequests super_admin 列出权限升级申请
+func (a *App) ListUpgradeRequests(w http.ResponseWriter, r *http.Request) {
+	c := middleware.ClaimsFromContext(r.Context())
+	if c == nil || c.Role != "super_admin" {
+		errJSON(w, http.StatusForbidden, "only super_admin can list upgrade requests")
+		return
+	}
+
+	statusFilter := r.URL.Query().Get("status")
+	if statusFilter == "" {
+		statusFilter = "pending"
+	}
+
+	rows, err := a.DB.Query(r.Context(), `
+		SELECT pr.id::text, pr.user_id::text, u.name, u.phone, pr.requested_role, pr.reason, pr.status, pr.created_at
+		FROM permission_requests pr
+		JOIN users u ON u.id = pr.user_id
+		WHERE pr.status = $1
+		ORDER BY pr.created_at ASC`, statusFilter)
+	if err != nil {
+		a.Log.Error("list upgrade requests", zap.Error(err))
+		errJSON(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	defer rows.Close()
+
+	var requests []map[string]any
+	for rows.Next() {
+		var id, userID, name, phone, requestedRole, reason, status string
+		var createdAt interface{}
+		if err := rows.Scan(&id, &userID, &name, &phone, &requestedRole, &reason, &status, &createdAt); err != nil {
+			a.Log.Warn("scan upgrade request", zap.Error(err))
+			continue
+		}
+		requests = append(requests, map[string]any{
+			"id":             id,
+			"user_id":        userID,
+			"user_name":      name,
+			"user_phone":     phone,
+			"requested_role": requestedRole,
+			"reason":         reason,
+			"status":         status,
+			"created_at":     createdAt,
+		})
+	}
+
+	JSON(w, http.StatusOK, map[string]any{"requests": requests})
+}
+
+// ReviewUpgradeRequest super_admin 审核权限升级申请
+func (a *App) ReviewUpgradeRequest(w http.ResponseWriter, r *http.Request) {
+	c := middleware.ClaimsFromContext(r.Context())
+	if c == nil || c.Role != "super_admin" {
+		errJSON(w, http.StatusForbidden, "only super_admin can review upgrade requests")
+		return
+	}
+
+	requestID := chi.URLParam(r, "id")
+	if requestID == "" {
+		errJSON(w, http.StatusBadRequest, "missing request id")
+		return
+	}
+
+	var body struct {
+		Action      string `json:"action"` // approve or reject
+		ReviewNotes string `json:"review_notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	body.Action = strings.ToLower(strings.TrimSpace(body.Action))
+	if body.Action != "approve" && body.Action != "reject" {
+		errJSON(w, http.StatusBadRequest, "action must be approve or reject")
+		return
+	}
+
+	// 获取申请信息
+	var userID, requestedRole, currentStatus string
+	err := a.DB.QueryRow(r.Context(), `
+		SELECT user_id::text, requested_role, status FROM permission_requests WHERE id = $1::uuid`,
+		requestID).Scan(&userID, &requestedRole, &currentStatus)
+	if err != nil {
+		errJSON(w, http.StatusNotFound, "request not found")
+		return
+	}
+	if currentStatus != "pending" {
+		errJSON(w, http.StatusBadRequest, "request already reviewed")
+		return
+	}
+
+	newStatus := "approved"
+	if body.Action == "reject" {
+		newStatus = "rejected"
+	}
+
+	_, err = a.DB.Exec(r.Context(), `
+		UPDATE permission_requests SET status = $1, reviewed_by = $2::uuid, review_notes = $3, reviewed_at = NOW()
+		WHERE id = $4::uuid`, newStatus, c.UserID, body.ReviewNotes, requestID)
+	if err != nil {
+		a.Log.Error("update upgrade request", zap.Error(err))
+		errJSON(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	// 如果批准，更新用户角色
+	if body.Action == "approve" {
+		_, err = a.DB.Exec(r.Context(), `UPDATE users SET role = $1 WHERE id = $2::uuid`,
+			requestedRole, userID)
+		if err != nil {
+			a.Log.Error("update user role after approval", zap.Error(err))
+		}
+	}
+
+	JSON(w, http.StatusOK, map[string]any{"message": "ok", "status": newStatus})
+}

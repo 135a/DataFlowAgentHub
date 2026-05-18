@@ -70,7 +70,7 @@ func setupTestApp(t *testing.T, pool *pgxpool.Pool, nl2sqlExec *nl2sqlexec.Execu
 		DB:         pool,
 		Redis:      nil, // nil Redis = fail-open for rate limiting
 		Nl2sql:     nil,
-		Bus:        ssebus.New(),
+		Bus:        ssebus.NewMemoryBus(log),
 		NATS:       nil,
 		AsyncTask:  nil,
 		NL2SQLExec: nl2sqlExec,

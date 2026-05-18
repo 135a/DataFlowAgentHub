@@ -2,10 +2,16 @@ package ssebus
 
 import (
 	"testing"
+
+	"go.uber.org/zap"
 )
 
+func newTestMemoryBus() *MemoryBus {
+	return NewMemoryBus(zap.NewNop())
+}
+
 func TestBusDropCounter(t *testing.T) {
-	b := New()
+	b := newTestMemoryBus()
 
 	// Initial value should be 0
 	if b.TotalDrops() != 0 {
@@ -13,7 +19,8 @@ func TestBusDropCounter(t *testing.T) {
 	}
 
 	// Subscribe and publish normally
-	ch := b.Subscribe("test-session")
+	ch, cancel := b.Subscribe("test-session")
+	defer cancel()
 	b.Publish("test-session", Event{Type: "test", Data: "hello"})
 
 	// Should receive the event
@@ -30,13 +37,12 @@ func TestBusDropCounter(t *testing.T) {
 	if b.TotalDrops() != 0 {
 		t.Errorf("after normal publish, TotalDrops() = %d, want 0", b.TotalDrops())
 	}
-
-	b.Unsubscribe("test-session", ch)
 }
 
 func TestBusDropCounterIncrement(t *testing.T) {
-	b := New()
-	ch := b.Subscribe("test-session")
+	b := newTestMemoryBus()
+	ch, cancel := b.Subscribe("test-session")
+	defer cancel()
 
 	// Fill the buffer (capacity 32) without consuming
 	for i := 0; i < 32; i++ {
@@ -69,5 +75,50 @@ func TestBusDropCounterIncrement(t *testing.T) {
 		}
 	}
 
-	b.Unsubscribe("test-session", ch)
+	// Buffer is drained; cancel should work without panic
+	cancel()
+}
+
+func TestBusInterface(t *testing.T) {
+	// Verify that MemoryBus satisfies the Bus interface
+	var b Bus = newTestMemoryBus()
+	_ = b
+
+	// Basic interface contract: subscribe -> publish -> receive
+	ch, cancel := b.Subscribe("iface-session")
+	defer cancel()
+
+	b.Publish("iface-session", Event{Type: "ping", Data: "pong"})
+
+	select {
+	case ev := <-ch:
+		if ev.Type != "ping" {
+			t.Errorf("expected type 'ping', got '%s'", ev.Type)
+		}
+	default:
+		t.Error("expected to receive event via Bus interface")
+	}
+}
+
+func TestMultipleSubscribers(t *testing.T) {
+	b := newTestMemoryBus()
+
+	ch1, cancel1 := b.Subscribe("multi-session")
+	defer cancel1()
+	ch2, cancel2 := b.Subscribe("multi-session")
+	defer cancel2()
+
+	b.Publish("multi-session", Event{Type: "broadcast", Data: "hello"})
+
+	// Both subscribers should receive the event
+	for i, ch := range []<-chan Event{ch1, ch2} {
+		select {
+		case ev := <-ch:
+			if ev.Type != "broadcast" {
+				t.Errorf("subscriber %d: expected type 'broadcast', got '%s'", i, ev.Type)
+			}
+		default:
+			t.Errorf("subscriber %d: expected to receive event", i)
+		}
+	}
 }

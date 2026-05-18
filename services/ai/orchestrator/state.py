@@ -1,4 +1,5 @@
-from typing import TypedDict, Any, Optional
+from typing import TypedDict, Any
+
 
 class AgentState(TypedDict, total=False):
     run_id: str
@@ -14,3 +15,4 @@ class AgentState(TypedDict, total=False):
     nl2sql_sql: str
     nl2sql_error: str
     workflow: str
+    workspace_id: str

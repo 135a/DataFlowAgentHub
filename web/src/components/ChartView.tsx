@@ -11,6 +11,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
+import styles from "./ChartView.module.css";
 
 interface Props {
   rows: Record<string, unknown>[];
@@ -73,12 +74,12 @@ export function ChartView({ rows, maxPoints = 100 }: Props) {
   }, [truncated]);
 
   if (xKey === null || chartData.length === 0) {
-    return <p style={{ color: "#999", fontSize: 13 }}>无可图表化的数据</p>;
+    return <p className={styles.noDataText}>无可图表化的数据</p>;
   }
 
   const hasNumData = numKeys.length > 0;
   if (!hasNumData) {
-    return <p style={{ color: "#999", fontSize: 13 }}>结果集中未检测到数值列</p>;
+    return <p className={styles.noNumericText}>结果集中未检测到数值列</p>;
   }
 
   const containerStyle: CSSProperties = {
@@ -89,8 +90,8 @@ export function ChartView({ rows, maxPoints = 100 }: Props) {
 
   if (renderError) {
     return (
-      <div style={{ ...containerStyle, display: "flex", alignItems: "center", justifyContent: "center", background: "#fef3f2", borderRadius: 8, border: "1px solid #fecaca" }}>
-        <p style={{ color: "#b91c1c", fontSize: 13 }}>图表渲染失败，请切换到表格视图</p>
+      <div className={`${styles.container} ${styles.errorContainer}`} style={containerStyle}>
+        <p className={styles.errorText}>图表渲染失败，请切换到表格视图</p>
       </div>
     );
   }
@@ -98,48 +99,30 @@ export function ChartView({ rows, maxPoints = 100 }: Props) {
   try {
     return (
       <div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 8, marginTop: 8 }}>
+        <div className={styles.toolbar}>
           <button
             type="button"
             onClick={() => setChartType("bar")}
-            style={{
-              padding: "4px 12px",
-              fontSize: 12,
-              cursor: "pointer",
-              fontWeight: chartType === "bar" ? "bold" : "normal",
-              background: chartType === "bar" ? "#1a5fb4" : "#eef1f5",
-              color: chartType === "bar" ? "#fff" : "#111",
-              border: "none",
-              borderRadius: 4,
-            }}
+            className={`${styles.chartBtn} ${chartType === "bar" ? styles.chartBtnActive : styles.chartBtnInactive}`}
           >
             柱状图
           </button>
           <button
             type="button"
             onClick={() => setChartType("line")}
-            style={{
-              padding: "4px 12px",
-              fontSize: 12,
-              cursor: "pointer",
-              fontWeight: chartType === "line" ? "bold" : "normal",
-              background: chartType === "line" ? "#1a5fb4" : "#eef1f5",
-              color: chartType === "line" ? "#fff" : "#111",
-              border: "none",
-              borderRadius: 4,
-            }}
+            className={`${styles.chartBtn} ${chartType === "line" ? styles.chartBtnActive : styles.chartBtnInactive}`}
           >
             折线图
           </button>
         </div>
 
         {truncated.length < rows.length && (
-          <p style={{ fontSize: 11, color: "#999", margin: "0 0 4px" }}>
+          <p className={styles.truncateNotice}>
             仅展示前 {maxPoints} 条数据的图表
           </p>
         )}
 
-        <div style={containerStyle}>
+        <div className={styles.container} style={containerStyle}>
           <ResponsiveContainer width="100%" height="100%">
             {chartType === "bar" ? (
               <BarChart data={chartData}>
@@ -170,8 +153,8 @@ export function ChartView({ rows, maxPoints = 100 }: Props) {
     );
   } catch {
     return (
-      <div style={{ ...containerStyle, display: "flex", alignItems: "center", justifyContent: "center", background: "#fef3f2", borderRadius: 8, border: "1px solid #fecaca" }}>
-        <p style={{ color: "#b91c1c", fontSize: 13 }}>图表渲染失败，请切换到表格视图</p>
+      <div className={`${styles.container} ${styles.errorContainer}`} style={containerStyle}>
+        <p className={styles.errorText}>图表渲染失败，请切换到表格视图</p>
       </div>
     );
   }

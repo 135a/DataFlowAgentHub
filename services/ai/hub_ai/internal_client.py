@@ -1,13 +1,19 @@
 """gRPC client for calling Go API's HubInternalService over mTLS.
 
 Replaces the old HTTP+HMAC callback pattern with direct gRPC calls.
+
+Provides both async (grpc.aio) and synchronous (grpc) interfaces so it
+can be used from async contexts (NATS consumers) as well as synchronous
+contexts (LangGraph sync node functions running in a thread pool).
 """
 
+from __future__ import annotations
 import json
 import logging
 import os
 
 import grpc
+from grpc import aio as grpc_aio
 
 from nl2sql.v1.nl2sql_pb2_grpc import HubInternalServiceStub
 from nl2sql.v1.nl2sql_pb2 import (
@@ -22,6 +28,13 @@ logger = logging.getLogger(__name__)
 
 class HubInternalClient:
     """Wraps HubInternalService gRPC stubs for all 4 callback RPCs.
+
+    Maintains TWO channels internally:
+    - ``_channel`` / ``_stub`` – synchronous (regular grpc), created in __init__
+    - ``_channel_aio`` / ``_stub_aio`` – async (grpc.aio), created via await _connect()
+
+    This allows the same client instance to be used from both sync and
+    async callers without friction.
 
     Reads mTLS cert paths from environment variables. Falls back to insecure
     channel when cert env vars are not set (local dev).
@@ -39,9 +52,10 @@ class HubInternalClient:
         client_cert = client_cert or os.getenv("HUB_GRPC_CLIENT_CERT") or ""
         client_key = client_key or os.getenv("HUB_GRPC_CLIENT_KEY") or ""
 
+        # --- synchronous channel (regular grpc) ---
         if ca_cert and client_cert and client_key:
             logger.info(
-                "connecting to Go gRPC with mTLS, target=%s", self.target
+                "creating sync gRPC channel with mTLS, target=%s", self.target
             )
             with open(ca_cert, "rb") as f:
                 ca_bytes = f.read()
@@ -57,24 +71,81 @@ class HubInternalClient:
             self._channel = grpc.secure_channel(self.target, creds)
         else:
             logger.warning(
-                "mTLS cert env vars not set, using insecure channel to %s",
+                "mTLS cert env vars not set, using insecure sync channel to %s",
                 self.target,
             )
             self._channel = grpc.insecure_channel(self.target)
-
         self._stub = HubInternalServiceStub(self._channel)
 
+        # --- async channel (grpc.aio) – created lazily via _connect() ---
+        self._channel_aio: grpc_aio.Channel | None = None
+        self._stub_aio: HubInternalServiceStub | None = None
+
+    async def _connect(self) -> None:
+        """Create the async gRPC channel and stub (idempotent)."""
+        if self._channel_aio is not None:
+            return
+        ca_cert = os.getenv("HUB_GRPC_CA_CERT") or ""
+        client_cert = os.getenv("HUB_GRPC_CLIENT_CERT") or ""
+        client_key = os.getenv("HUB_GRPC_CLIENT_KEY") or ""
+        if ca_cert and client_cert and client_key:
+            logger.info(
+                "creating async gRPC channel with mTLS, target=%s", self.target
+            )
+            with open(ca_cert, "rb") as f:
+                ca_bytes = f.read()
+            with open(client_cert, "rb") as f:
+                cert_bytes = f.read()
+            with open(client_key, "rb") as f:
+                key_bytes = f.read()
+            creds = grpc_aio.ssl_channel_credentials(
+                root_certificates=ca_bytes,
+                private_key=key_bytes,
+                certificate_chain=cert_bytes,
+            )
+            self._channel_aio = grpc_aio.secure_channel(self.target, creds)
+        else:
+            logger.warning(
+                "mTLS cert env vars not set, using insecure async channel to %s",
+                self.target,
+            )
+            self._channel_aio = grpc_aio.insecure_channel(self.target)
+        self._stub_aio = HubInternalServiceStub(self._channel_aio)
+
     # ------------------------------------------------------------------
-    # TaskCallback  – 报告异步任务结果（succeeded / failed）
+    # TaskCallback  – async
     # ------------------------------------------------------------------
-    def task_callback(
+    async def task_callback(
         self,
         task_id: str,
         status: str,
         result: dict | list | None = None,
         error_message: str = "",
     ) -> None:
-        """Report async task result to Go API."""
+        """Report async task result to Go API (async)."""
+        result_json = json.dumps(result) if result is not None else "null"
+        req = TaskCallbackRequest(
+            task_id=task_id,
+            status=status,
+            result_json=result_json,
+            error_message=error_message,
+        )
+        try:
+            await self._stub_aio.TaskCallback(req)
+        except grpc_aio.AioRpcError as e:
+            logger.error("TaskCallback RPC failed: %s", e)
+
+    # ------------------------------------------------------------------
+    # TaskCallback  – synchronous wrapper (for sync contexts)
+    # ------------------------------------------------------------------
+    def task_callback_sync(
+        self,
+        task_id: str,
+        status: str,
+        result: dict | list | None = None,
+        error_message: str = "",
+    ) -> None:
+        """Synchronous version of task_callback."""
         result_json = json.dumps(result) if result is not None else "null"
         req = TaskCallbackRequest(
             task_id=task_id,
@@ -88,9 +159,9 @@ class HubInternalClient:
             logger.error("TaskCallback RPC failed: %s", e)
 
     # ------------------------------------------------------------------
-    # RunStepCallback – 追踪 LangGraph 步骤
+    # RunStepCallback  – async
     # ------------------------------------------------------------------
-    def run_step_callback(
+    async def run_step_callback(
         self,
         run_id: str,
         agent_name: str,
@@ -99,8 +170,34 @@ class HubInternalClient:
         output_summary: str = "",
         error_message: str = "",
     ) -> None:
-        """Report a LangGraph agent step to Go API."""
-        # truncate long summaries to keep the payload reasonable
+        """Report a LangGraph agent step to Go API (async)."""
+        MAX_SUMMARY = 1000
+        req = RunStepCallbackRequest(
+            run_id=run_id,
+            agent_name=agent_name,
+            status=status,
+            input_summary=input_summary[:MAX_SUMMARY],
+            output_summary=output_summary[:MAX_SUMMARY],
+            error_message=error_message,
+        )
+        try:
+            await self._stub_aio.RunStepCallback(req)
+        except grpc_aio.AioRpcError as e:
+            logger.warning("RunStepCallback RPC failed: %s", e)
+
+    # ------------------------------------------------------------------
+    # RunStepCallback  – synchronous wrapper
+    # ------------------------------------------------------------------
+    def run_step_callback_sync(
+        self,
+        run_id: str,
+        agent_name: str,
+        status: str,
+        input_summary: str = "",
+        output_summary: str = "",
+        error_message: str = "",
+    ) -> None:
+        """Synchronous version of run_step_callback."""
         MAX_SUMMARY = 1000
         req = RunStepCallbackRequest(
             run_id=run_id,
@@ -116,19 +213,43 @@ class HubInternalClient:
             logger.warning("RunStepCallback RPC failed: %s", e)
 
     # ------------------------------------------------------------------
-    # InternalNL2SQL – 调用 Go 安全边界执行 NL2SQL
+    # InternalNL2SQL  – async
     # ------------------------------------------------------------------
-    def internal_nl2sql(
+    async def internal_nl2sql(
         self,
         user_message: str,
         schema_json: str = "",
         trace_id: str = "",
         dialect: str = "postgres",
     ) -> dict:
-        """Call Go's NL2SQL executor (SQL generation → read-only execution).
+        """Call Go's NL2SQL executor (async)."""
+        req = InternalNL2SQLRequest(
+            trace_id=trace_id,
+            user_message=user_message,
+            schema_json=schema_json,
+            dialect=dialect,
+        )
+        resp = await self._stub_aio.InternalNL2SQL(req)
+        if not resp.ok:
+            return {"ok": False, "error_message": resp.error_message}
+        return {
+            "ok": True,
+            "sql": resp.sql,
+            "rows": json.loads(resp.rows_json) if resp.rows_json else [],
+            "notes": resp.notes,
+        }
 
-        Returns a dict with keys: sql, rows, notes, ok, error_message.
-        """
+    # ------------------------------------------------------------------
+    # InternalNL2SQL  – synchronous wrapper
+    # ------------------------------------------------------------------
+    def internal_nl2sql_sync(
+        self,
+        user_message: str,
+        schema_json: str = "",
+        trace_id: str = "",
+        dialect: str = "postgres",
+    ) -> dict:
+        """Synchronous version of internal_nl2sql."""
         req = InternalNL2SQLRequest(
             trace_id=trace_id,
             user_message=user_message,
@@ -146,16 +267,38 @@ class HubInternalClient:
         }
 
     # ------------------------------------------------------------------
-    # KnowledgeDocCallback – 报告文档索引状态
+    # KnowledgeDocCallback  – async
     # ------------------------------------------------------------------
-    def knowledge_doc_callback(
+    async def knowledge_doc_callback(
         self,
         doc_id: str,
         status: str,
         chroma_doc_id: str = "",
         chunk_count: int = 0,
     ) -> None:
-        """Report knowledge document indexing status to Go API."""
+        """Report knowledge document indexing status to Go API (async)."""
+        req = KnowledgeDocCallbackRequest(
+            doc_id=doc_id,
+            status=status,
+            chroma_doc_id=chroma_doc_id,
+            chunk_count=chunk_count,
+        )
+        try:
+            await self._stub_aio.KnowledgeDocCallback(req)
+        except grpc_aio.AioRpcError as e:
+            logger.error("KnowledgeDocCallback RPC failed: %s", e)
+
+    # ------------------------------------------------------------------
+    # KnowledgeDocCallback  – synchronous wrapper
+    # ------------------------------------------------------------------
+    def knowledge_doc_callback_sync(
+        self,
+        doc_id: str,
+        status: str,
+        chroma_doc_id: str = "",
+        chunk_count: int = 0,
+    ) -> None:
+        """Synchronous version of knowledge_doc_callback."""
         req = KnowledgeDocCallbackRequest(
             doc_id=doc_id,
             status=status,
@@ -170,5 +313,10 @@ class HubInternalClient:
     # ------------------------------------------------------------------
     # 资源清理
     # ------------------------------------------------------------------
-    def close(self) -> None:
+    async def close(self) -> None:
+        """Close both sync and async channels."""
         self._channel.close()
+        if self._channel_aio:
+            await self._channel_aio.close()
+            self._channel_aio = None
+            self._stub_aio = None

@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import styles from "./ResultTable.module.css";
 
 function formatCell(v: unknown): string {
   if (v === null || v === undefined) return "";
@@ -23,32 +24,16 @@ export function ResultTable({ rows }: { rows: Record<string, unknown>[] }) {
   }, [rows]);
 
   if (!rows.length) {
-    return <p style={{ color: "#666", margin: "8px 0 0", fontSize: 14 }}>查询返回 0 行</p>;
+    return <p className={styles.emptyRow}>查询返回 0 行</p>;
   }
 
   return (
-    <div style={{ overflowX: "auto", marginTop: 8 }}>
-      <table
-        style={{
-          borderCollapse: "collapse",
-          fontSize: 13,
-          width: "100%",
-          background: "#fff",
-        }}
-      >
+    <div className={styles.wrapper}>
+      <table className={styles.table}>
         <thead>
           <tr>
             {columns.map((c) => (
-              <th
-                key={c}
-                style={{
-                  border: "1px solid #ccc",
-                  padding: "8px 10px",
-                  background: "#f0f4f8",
-                  textAlign: "left",
-                  whiteSpace: "nowrap",
-                }}
-              >
+              <th key={c} className={styles.headerCell}>
                 {c}
               </th>
             ))}
@@ -56,17 +41,11 @@ export function ResultTable({ rows }: { rows: Record<string, unknown>[] }) {
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={i} style={{ background: i % 2 ? "#fafafa" : "#fff" }}>
+            <tr key={i} className={i % 2 ? styles.oddRow : styles.evenRow}>
               {columns.map((c) => (
                 <td
                   key={c}
-                  style={{
-                    border: "1px solid #e0e0e0",
-                    padding: "6px 10px",
-                    maxWidth: 360,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
+                  className={styles.dataCell}
                   title={formatCell(r[c])}
                 >
                   {formatCell(r[c])}

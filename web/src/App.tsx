@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiFetch, apiJson } from "./api";
-import { useIsAdmin, useIsOperator } from "./hooks/useRole";
+import { useIsSuperAdmin, useIsDataAdmin, useIsNormalUser } from "./hooks/useRole";
 import { useSSE } from "./hooks/useSSE";
 import { ModeSelector } from "./components/ModeSelector";
 import { ProgressPanel } from "./components/ProgressPanel";
@@ -15,7 +15,12 @@ import type {
   RunStep,
   SessionsResponse,
   MessagesResponse,
+  Dataset,
+  DatasetsResponse,
+  DatasetTable,
+  DatasetTablesResponse,
 } from "./types/api";
+import styles from "./App.module.css";
 
 type QueryMode = "quick" | "deep";
 
@@ -79,8 +84,9 @@ function fmtModeDesc(mode: QueryMode): string {
 
 export function App() {
   const token = useMemo(() => localStorage.getItem("token"), []);
-  const isAdmin = useIsAdmin();
-  const isOperator = useIsOperator();
+  const isSuperAdmin = useIsSuperAdmin();
+  const isDataAdmin = useIsDataAdmin();
+  const isNormalUser = useIsNormalUser();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sid, setSid] = useState<string | null>(null);
   const [messages, setMessages] = useState<ApiMessage[]>([]);
@@ -90,6 +96,12 @@ export function App() {
     return (localStorage.getItem("queryMode") as QueryMode) || "deep";
   });
   const [sending, setSending] = useState(false);
+
+  // ---- dataset / table selector state ----
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [selectedDatasetId, setSelectedDatasetId] = useState("");
+  const [datasetTables, setDatasetTables] = useState<DatasetTable[]>([]);
+  const [selectedTableId, setSelectedTableId] = useState("");
 
   // ---- progress tracking state ----
   const [isProcessing, setIsProcessing] = useState(false);
@@ -208,6 +220,26 @@ export function App() {
     void loadMessages();
   }, [loadMessages]);
 
+  // ---- load datasets ----
+  useEffect(() => {
+    if (!token) return;
+    apiJson<DatasetsResponse>("/v1/datasets", { token })
+      .then(j => setDatasets(j.datasets || []))
+      .catch(() => {});
+  }, [token]);
+
+  // ---- load tables when dataset changes ----
+  useEffect(() => {
+    if (!selectedDatasetId || !token) {
+      setDatasetTables([]);
+      setSelectedTableId("");
+      return;
+    }
+    apiJson<DatasetTablesResponse>(`/v1/datasets/${selectedDatasetId}/tables`, { token })
+      .then(j => setDatasetTables(j.tables || []))
+      .catch(() => setDatasetTables([]));
+  }, [selectedDatasetId, token]);
+
   function handleModeChange(newMode: QueryMode) {
     setMode(newMode);
     localStorage.setItem("queryMode", newMode);
@@ -312,14 +344,15 @@ export function App() {
   }
 
   return (
-    <div style={{ fontFamily: "system-ui", padding: 16, maxWidth: 960, margin: "0 auto" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ margin: 0 }}>DataFlowAgentHub</h1>
-        <nav style={{ display: "flex", gap: 16, alignItems: "center" }}>
-          <Link to="/data-sources" style={{ fontSize: 14 }}>数据源</Link>
-          <Link to="/tables" style={{ fontSize: 14 }}>数据库表</Link>
-          <Link to="/knowledge" style={{ fontSize: 14 }}>知识库</Link>
-          {isAdmin && <Link to="/admin/users" style={{ fontSize: 14 }}>用户管理</Link>}
+    <div className={styles.container}>
+      <header className={styles.header}>
+        <h1 className={styles.headerTitle}>DataFlowAgentHub</h1>
+        <nav className={styles.nav}>
+          <Link to="/datasets" className={styles.navLink}>数据集</Link>
+          <Link to="/knowledge" className={styles.navLink}>知识库</Link>
+          {isSuperAdmin && <Link to="/admin/users" className={styles.navLink}>用户管理</Link>}
+          {isSuperAdmin && <Link to="/admin/upgrade-review" className={styles.navLink}>审批管理</Link>}
+          {isNormalUser && <Link to="/upgrade-request" className={styles.navLink}>升级申请</Link>}
           <Link to="/login" onClick={() => localStorage.removeItem("token")}>
             退出
           </Link>
@@ -330,8 +363,13 @@ export function App() {
         <code>/v1/sessions/&lt;id&gt;/stream?token=&lt;sse_token&gt;</code>
       </p>
 
-      {isOperator && (
-        <DataManagementPanel token={token!} onTableListChanged={loadSessions} />
+      {isDataAdmin && (
+        <DataManagementPanel
+          token={token!}
+          onTableListChanged={loadSessions}
+          datasetId={selectedDatasetId || undefined}
+          datasetTableId={selectedTableId || undefined}
+        />
       )}
 
       <SessionSidebar
@@ -340,11 +378,45 @@ export function App() {
         token={token!}
         onSelect={setSid}
         onSessionsChanged={loadSessions}
+        datasetId={selectedDatasetId || undefined}
+        datasetTableId={selectedTableId || undefined}
       />
 
       {sid && (
         <section>
           <h2>消息</h2>
+
+          {/* 数据集 / 数据表 选择器 */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+            <label style={{ fontSize: 13 }}>
+              数据集:
+              <select
+                value={selectedDatasetId}
+                onChange={(e) => setSelectedDatasetId(e.target.value)}
+                style={{ marginLeft: 4, padding: "2px 4px" }}
+              >
+                <option value="">请选择数据集</option>
+                {datasets.map((ds) => (
+                  <option key={ds.id} value={ds.id}>{ds.name}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ fontSize: 13 }}>
+              数据表:
+              <select
+                value={selectedTableId}
+                onChange={(e) => setSelectedTableId(e.target.value)}
+                style={{ marginLeft: 4, padding: "2px 4px" }}
+                disabled={!selectedDatasetId}
+              >
+                <option value="">请选择数据表</option>
+                {datasetTables.map((t) => (
+                  <option key={t.id} value={t.id}>{t.display_name || t.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -355,14 +427,14 @@ export function App() {
             }}
           >
             <ModeSelector mode={mode} onChange={handleModeChange} />
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div className={styles.inputRow}>
               <input
                 name="t"
                 placeholder="例如：how many rows in demo_sales"
-                style={{ flex: 1, padding: "6px 10px", fontSize: 14 }}
+                className={styles.textInput}
                 disabled={sending}
               />
-              <button type="submit" style={{ padding: "6px 16px" }} disabled={sending}>
+              <button type="submit" className={styles.sendButton} disabled={sending}>
                 {sending ? "处理中..." : "发送"}
               </button>
             </div>
@@ -376,16 +448,16 @@ export function App() {
               estimatedRemainingMs={estimatedRemainingMs}
             />
           ) : sendStatus ? (
-            <p style={{ fontSize: 13, color: sendStatus.startsWith("错误") ? "#dc2626" : "#444", margin: "8px 0 0" }}>
+            <p className={`${styles.statusText} ${sendStatus.startsWith("错误") ? styles.statusError : styles.statusInfo}`}>
               {sendStatus}
             </p>
           ) : (
-            <p style={{ fontSize: 13, color: "#6b7280", margin: "8px 0 0" }}>
+            <p className={`${styles.statusText} ${styles.statusHint}`}>
               {fmtModeDesc(mode)}
             </p>
           )}
 
-          <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+          <div className={styles.messagesContainer}>
             {messages.map((m) => (
               <MessageBlock key={m.id} msg={m} />
             ))}

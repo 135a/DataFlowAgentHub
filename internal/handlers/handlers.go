@@ -14,6 +14,7 @@ import (
 	hubcrypto "github.com/dataflowagenthub/hub/internal/crypto"
 	"github.com/dataflowagenthub/hub/internal/llm"
 	"github.com/dataflowagenthub/hub/internal/middleware"
+	"github.com/dataflowagenthub/hub/internal/mysqlmgr"
 	"github.com/dataflowagenthub/hub/internal/nl2sqlexec"
 	"github.com/dataflowagenthub/hub/internal/ratelimit"
 	"github.com/dataflowagenthub/hub/internal/schema"
@@ -42,11 +43,12 @@ type App struct {
 	DB         *pgxpool.Pool
 	Redis      *redis.Client
 	Nl2sql     *worker.NL2SQLClient
-	Bus        *ssebus.Bus
+	Bus        ssebus.Bus
 	NATS       *nats.Conn
 	AsyncTask  *async.Client
 	NL2SQLExec *nl2sqlexec.Executor
 	LlmClient  *llm.Client
+	MySQLMgr   *mysqlmgr.Manager
 }
 
 func JSON(w http.ResponseWriter, status int, v any) {
@@ -161,6 +163,11 @@ func (a *App) ListSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, map[string]any{"id": id, "title": title, "created_at": created.UTC().Format(time.RFC3339)})
 	}
+	if err := rows.Err(); err != nil {
+		a.Log.Error("list sessions rows iteration", zap.Error(err))
+		errJSON(w, http.StatusInternalServerError, "db")
+		return
+	}
 	JSON(w, http.StatusOK, map[string]any{"sessions": out})
 }
 
@@ -211,6 +218,9 @@ func (a *App) ListMessages(w http.ResponseWriter, r *http.Request) {
 			"id": id, "role": role, "content": obj, "created_at": created.UTC().Format(time.RFC3339),
 		})
 	}
+	if err := rows.Err(); err != nil {
+		a.Log.Warn("list messages rows iteration", zap.Error(err))
+	}
 
 	// 查询运行步骤
 	stepRows, err := a.DB.Query(r.Context(), `
@@ -236,6 +246,9 @@ func (a *App) ListMessages(w http.ResponseWriter, r *http.Request) {
 			}
 			steps = append(steps, step)
 		}
+		if err := stepRows.Err(); err != nil {
+			a.Log.Warn("agent run steps rows iteration", zap.Error(err))
+		}
 	}
 
 	JSON(w, http.StatusOK, map[string]any{"messages": items, "run_steps": steps})
@@ -244,8 +257,10 @@ func (a *App) ListMessages(w http.ResponseWriter, r *http.Request) {
 func (a *App) CreateSession(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
 	var body struct {
-		Title        string `json:"title"`
-		DataSourceID string `json:"data_source_id"`
+		Title          string `json:"title"`
+		DataSourceID   string `json:"data_source_id"`
+		DatasetID      string `json:"dataset_id"`
+		DatasetTableID string `json:"dataset_table_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		a.Log.Warn("decode create session body", zap.Error(err))
@@ -267,18 +282,42 @@ func (a *App) CreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 		dsID = &ds
 	}
+
+	// 验证 dataset 和 table 关系
+	var dsIDPtr, dtIDPtr *string
+	if did := strings.TrimSpace(body.DatasetID); did != "" {
+		var exists int
+		if err := a.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM datasets WHERE id = $1::uuid AND status != 'deleted'`, did).Scan(&exists); err != nil || exists == 0 {
+			errJSON(w, http.StatusBadRequest, "dataset not found")
+			return
+		}
+		dsIDPtr = &did
+	}
+	if tid := strings.TrimSpace(body.DatasetTableID); tid != "" {
+		if dsIDPtr == nil {
+			errJSON(w, http.StatusBadRequest, "dataset_table_id requires dataset_id")
+			return
+		}
+		var exists int
+		if err := a.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM dataset_tables WHERE id = $1::uuid AND dataset_id = $2::uuid AND status = 'active'`, tid, *dsIDPtr).Scan(&exists); err != nil || exists == 0 {
+			errJSON(w, http.StatusBadRequest, "table not found in dataset")
+			return
+		}
+		dtIDPtr = &tid
+	}
+
 	id := uuid.NewString()
 	var err error
 	if dsID != nil {
 		_, err = a.DB.Exec(r.Context(), `
-			INSERT INTO sessions (id, workspace_id, user_id, data_source_id, title)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5)`,
-			id, c.WorkspaceID, c.UserID, *dsID, title)
+			INSERT INTO sessions (id, workspace_id, user_id, data_source_id, title, dataset_id, dataset_table_id)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::uuid, $7::uuid)`,
+			id, c.WorkspaceID, c.UserID, *dsID, title, dsIDPtr, dtIDPtr)
 	} else {
 		_, err = a.DB.Exec(r.Context(), `
-			INSERT INTO sessions (id, workspace_id, user_id, title)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, $4)`,
-			id, c.WorkspaceID, c.UserID, title)
+			INSERT INTO sessions (id, workspace_id, user_id, title, dataset_id, dataset_table_id)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::uuid, $6::uuid)`,
+			id, c.WorkspaceID, c.UserID, title, dsIDPtr, dtIDPtr)
 	}
 	if err != nil {
 		a.Log.Error("create session", zap.Error(err))
@@ -311,20 +350,16 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	trace := middleware.TraceFromContext(ctx)
 
-	var dsID, dsKind *string
 	if !a.sessionBelongsToWorkspace(ctx, sid, c.WorkspaceID) {
 		errJSON(w, http.StatusNotFound, "session not found")
 		return
 	}
+
+	// 检查会话是否关联数据集
+	var datasetID, datasetTableID *string
 	if err := a.DB.QueryRow(ctx, `
-		SELECT ds.id::text, ds.kind FROM data_sources ds
-		JOIN sessions s ON s.data_source_id = ds.id
-		WHERE s.id = $1::uuid`, sid).Scan(&dsID, &dsKind); err != nil {
-		a.Log.Debug("session has no data source, using default", zap.String("session_id", sid))
-	}
-	if dsKind == nil {
-		k := "postgres"
-		dsKind = &k
+		SELECT dataset_id::text, dataset_table_id::text FROM sessions WHERE id = $1::uuid`, sid).Scan(&datasetID, &datasetTableID); err != nil {
+		// sessions 没有 dataset 关联，继续使用旧流程
 	}
 
 	// 插入用户消息
@@ -339,14 +374,6 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	a.Bus.Publish(sid, ssebus.Event{Type: "user_message", Data: map[string]string{"text": body.Text}})
 
-	// 解析 schema
-	schemaJSON, err := a.resolveSchema(ctx, dsID, c.WorkspaceID)
-	if err != nil {
-		errJSON(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	dialect := *dsKind
-
 	// 创建 run
 	rid := uuid.NewString()
 	if _, err := a.DB.Exec(ctx, `INSERT INTO runs (id, session_id, status) VALUES ($1::uuid, $2::uuid, 'running')`, rid, sid); err != nil {
@@ -357,7 +384,32 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 		"started_at": startTime.UTC().Format(time.RFC3339),
 	}})
 
-	// 路由：异步（Agent Pipeline）或同步（NL2SQL）
+	// 如果会话关联了数据集表，走 MySQL 路径
+	if datasetID != nil && datasetTableID != nil && *datasetID != "" && *datasetTableID != "" {
+		a.postMessageToDataset(ctx, w, r, c, sid, rid, body, trace, startTime, *datasetID, *datasetTableID)
+		return
+	}
+
+	// 旧流程：PostgreSQL / 外部数据源
+	var dsID, dsKind *string
+	if err := a.DB.QueryRow(ctx, `
+		SELECT ds.id::text, ds.kind FROM data_sources ds
+		JOIN sessions s ON s.data_source_id = ds.id
+		WHERE s.id = $1::uuid`, sid).Scan(&dsID, &dsKind); err != nil {
+		a.Log.Debug("session has no data source, using default", zap.String("session_id", sid))
+	}
+	if dsKind == nil {
+		k := "postgres"
+		dsKind = &k
+	}
+
+	schemaJSON, err := a.resolveSchema(ctx, dsID, c.WorkspaceID)
+	if err != nil {
+		errJSON(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	dialect := *dsKind
+
 	workflow := strings.ToLower(strings.TrimSpace(body.Workflow))
 	if workflow == "" {
 		workflow = "auto"
@@ -381,7 +433,6 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 同步 NL2SQL 执行
 	result, err := a.NL2SQLExec.Execute(ctx, nl2sqlexec.Input{
 		TraceID:     trace,
 		SessionID:   sid,
@@ -413,6 +464,127 @@ func (a *App) PostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSON(w, http.StatusOK, resp)
+}
+
+// postMessageToDataset 处理关联到数据集的会话消息（MySQL 路径）
+func (a *App) postMessageToDataset(ctx context.Context, w http.ResponseWriter, r *http.Request, c *auth.Claims, sid, rid string, body struct {
+	Text     string `json:"text"`
+	Workflow string `json:"workflow"`
+}, trace string, startTime time.Time, datasetID, datasetTableID string) {
+	// 构建 schema 从 table_fields
+	schemaJSON, err := a.resolveDatasetSchema(ctx, datasetTableID)
+	if err != nil {
+		a.finishRunFailed(ctx, rid, sid, "schema error: "+err.Error(), codes.Internal)
+		errJSON(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	// 获取 MySQL 连接池
+	var mysqlDB string
+	if err := a.DB.QueryRow(ctx, `SELECT mysql_database FROM datasets WHERE id = $1::uuid`, datasetID).Scan(&mysqlDB); err != nil {
+		a.finishRunFailed(ctx, rid, sid, "dataset not found", codes.NotFound)
+		errJSON(w, http.StatusNotFound, "dataset not found")
+		return
+	}
+	pool, ok := a.MySQLMgr.GetPool(datasetID)
+	if !ok {
+		pool, err = a.MySQLMgr.Connect(datasetID, mysqlDB)
+		if err != nil {
+			a.Log.Error("connect mysql", zap.Error(err))
+			a.finishRunFailed(ctx, rid, sid, "database connection error", codes.Internal)
+			errJSON(w, http.StatusInternalServerError, "database connection error")
+			return
+		}
+	}
+
+	workflow := strings.ToLower(strings.TrimSpace(body.Workflow))
+	if workflow == "" {
+		workflow = "auto"
+	}
+	textLow := strings.ToLower(body.Text)
+	isComplex := strings.Contains(textLow, "分析") || strings.Contains(textLow, "报告") ||
+		strings.Contains(textLow, "analyze") || strings.Contains(textLow, "report")
+	useAgentPipeline := (workflow == "agent_pipeline") || (workflow == "auto" && isComplex)
+
+	if useAgentPipeline {
+		taskID, err := a.AsyncTask.EnqueueTask(ctx, "workspace", sid, rid, "agent_pipeline", map[string]any{
+			"user_message": body.Text,
+			"schema_json":  schemaJSON,
+		})
+		if err != nil {
+			a.finishRunFailed(ctx, rid, sid, "failed to enqueue task: "+err.Error(), codes.Internal)
+			errJSON(w, http.StatusInternalServerError, "enqueue error")
+			return
+		}
+		JSON(w, http.StatusAccepted, map[string]any{"run_id": rid, "task_id": taskID, "status": "pending_async"})
+		return
+	}
+
+	result, err := a.NL2SQLExec.ExecuteMySQL(ctx, nl2sqlexec.Input{
+		TraceID:     trace,
+		SessionID:   sid,
+		UserMessage: body.Text,
+		SchemaJSON:  schemaJSON,
+		Dialect:     "mysql",
+		Role:        c.Role,
+	}, pool)
+	if err != nil {
+		if genErr, ok := err.(*nl2sqlexec.GenerateError); ok {
+			a.finishRunFailed(ctx, rid, sid, genErr.Message, codes.Internal)
+			errJSON(w, http.StatusBadRequest, genErr.Message)
+			return
+		}
+		a.finishRunFailed(ctx, rid, sid, err.Error(), codes.InvalidArgument)
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	resp, err := a.publishSyncResult(ctx, rid, sid, result, startTime)
+	if err != nil {
+		a.finishRunFailed(ctx, rid, sid, "marshal error", codes.Internal)
+		errJSON(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	JSON(w, http.StatusOK, resp)
+}
+
+// resolveDatasetSchema 从 table_fields 构建数据集表的 schema JSON。
+func (a *App) resolveDatasetSchema(ctx context.Context, tableID string) (string, error) {
+	rows, err := a.DB.Query(ctx, `
+		SELECT dt.name, tf.name, tf.field_type, tf.is_nullable
+		FROM table_fields tf
+		JOIN dataset_tables dt ON dt.id = tf.table_id
+		WHERE tf.table_id = $1::uuid
+		ORDER BY tf.ordinal_position ASC`, tableID)
+	if err != nil {
+		return "", fmt.Errorf("query dataset schema: %w", err)
+	}
+	defer rows.Close()
+
+	var tableName string
+	var columns []schema.ColumnSchema
+	for rows.Next() {
+		var colName, colType string
+		var nullable bool
+		if err := rows.Scan(&tableName, &colName, &colType, &nullable); err != nil {
+			return "", fmt.Errorf("scan dataset schema: %w", err)
+		}
+		columns = append(columns, schema.ColumnSchema{
+			Name:     colName,
+			Type:     colType,
+			Nullable: nullable,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("iterate dataset schema: %w", err)
+	}
+
+	sr := &schema.SchemaResult{
+		Tables: []schema.TableSchema{
+			{Name: tableName, Columns: columns},
+		},
+	}
+	return sr.ToJSON()
 }
 
 // resolveSchema 为会话解析数据库 schema，返回 JSON 字符串
@@ -560,8 +732,8 @@ func (a *App) SessionStream(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusNotFound, "session not found")
 		return
 	}
-	ch := a.Bus.Subscribe(sid)
-	defer a.Bus.Unsubscribe(sid, ch)
+	ch, cancel := a.Bus.Subscribe(sid)
+	defer cancel()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -633,6 +805,9 @@ func Routes(a *App) http.Handler {
 	// 注册登录端点
 	r.Post("/v1/auth/login", a.Login)
 
+	// 注册公开路由（无需认证）
+	r.Post("/v1/auth/self-register", a.SelfRegister) // 用户自注册
+
 	// 注册v1版本API路由组
 	r.Route("/v1", func(r chi.Router) {
 		// 为v1路由组添加认证中间件
@@ -646,37 +821,57 @@ func Routes(a *App) http.Handler {
 		r.Get("/sessions/{sessionID}/stream", a.SessionStream)  // 会话流
 		r.Post("/sessions/{sessionID}/sse-token", a.SSEToken)   // SSE令牌
 
-		// 用户管理路由（admin only）
-		r.With(middleware.RequireMinRole("admin")).Post("/auth/register", a.Register)         // 创建用户
-		r.With(middleware.RequireMinRole("admin")).Get("/users", a.ListUsers)                  // 用户列表
-		r.With(middleware.RequireMinRole("admin")).Put("/users/{id}/role", a.ChangeUserRole)   // 修改角色
-		r.With(middleware.RequireMinRole("admin")).Delete("/users/{id}", a.DeleteUser)         // 删除用户
+		// 用户管理路由（super_admin only）
+		r.With(middleware.RequireMinRole("super_admin")).Post("/auth/register", a.Register)         // 创建用户
+		r.With(middleware.RequireMinRole("super_admin")).Get("/users", a.ListUsers)                  // 用户列表
+		r.With(middleware.RequireMinRole("super_admin")).Put("/users/{id}/role", a.ChangeUserRole)   // 修改角色
+		r.With(middleware.RequireMinRole("super_admin")).Delete("/users/{id}", a.DeleteUser)         // 删除用户
+
+		// 权限升级申请路由
+		r.Post("/auth/upgrade-request", a.CreateUpgradeRequest)                                              // 提交升级申请（normal_user）
+		r.With(middleware.RequireMinRole("super_admin")).Get("/auth/upgrade-requests", a.ListUpgradeRequests)  // 列出申请
+		r.With(middleware.RequireMinRole("super_admin")).Put("/auth/upgrade-requests/{id}", a.ReviewUpgradeRequest) // 审核申请
 
 		// 数据源相关路由
 		r.Get("/data-sources", a.ListDataSources) // 获取数据源列表
 
-		// 以下路由需要operator角色权限
-		r.With(middleware.RequireMinRole("operator")).Post("/data-sources", a.CreateDataSource)         // 创建数据源
-		r.With(middleware.RequireMinRole("operator")).Post("/data-sources/{id}/test", a.TestDataSource) // 测试数据源
-		r.With(middleware.RequireMinRole("admin")).Put("/data-sources/{id}", a.UpdateDataSource)        // 编辑数据源
-		r.With(middleware.RequireMinRole("admin")).Delete("/data-sources/{id}", a.DeleteDataSource)     // 删除数据源
+		// 以下路由需要data_admin+角色权限
+		r.With(middleware.RequireMinRole("data_admin")).Post("/data-sources", a.CreateDataSource)         // 创建数据源
+		r.With(middleware.RequireMinRole("normal_user")).Post("/data-sources/{id}/test", a.TestDataSource) // 测试数据源
+		r.With(middleware.RequireMinRole("super_admin")).Put("/data-sources/{id}", a.UpdateDataSource)     // 编辑数据源
+		r.With(middleware.RequireMinRole("super_admin")).Delete("/data-sources/{id}", a.DeleteDataSource)  // 删除数据源
 
 		// 知识文档相关路由
-		// 以下路由需要operator角色权限
-		r.With(middleware.RequireMinRole("operator")).Get("/workspaces/{workspaceID}/knowledge/docs", a.ListKnowledgeDocs)   // 获取知识文档列表
-		r.With(middleware.RequireMinRole("operator")).Post("/workspaces/{workspaceID}/knowledge/docs", a.UploadKnowledgeDoc) // 上传知识文档
+		r.With(middleware.RequireMinRole("data_admin")).Get("/workspaces/{workspaceID}/knowledge/docs", a.ListKnowledgeDocs)   // 获取知识文档列表
+		r.With(middleware.RequireMinRole("data_admin")).Post("/workspaces/{workspaceID}/knowledge/docs", a.UploadKnowledgeDoc) // 上传知识文档
 
 		// 任务和运行相关路由
 		r.Get("/runs/{runID}/report", a.DownloadReport) // 下载运行报告
 		r.Get("/tasks/{taskID}", a.TaskStatus)          // 获取任务状态
 
-		// 数据管理路由（operator+）
-		r.With(middleware.RequireMinRole("operator")).Post("/data/upload", a.UploadData)                // 文件上传导入
-		r.With(middleware.RequireMinRole("operator")).Post("/data/suggest-table", a.SuggestTable)        // AI 建表建议
-		r.With(middleware.RequireMinRole("operator")).Post("/data/create-table", a.CreateTable)          // 确认建表
+		// 数据管理路由
+		r.With(middleware.RequireMinRole("normal_user")).Post("/data/upload", a.UploadData)                // 文件上传导入
+		r.Post("/data/suggest-table", a.SuggestTable)        // 已禁用
+		r.Post("/data/create-table", a.CreateTable)          // 已禁用
 
 		// Schema 路由
 		r.Get("/schema/tables", a.ListTables) // 获取表结构列表
+
+		// ====== 数据集管理路由 ======
+		r.Get("/datasets", a.ListDatasets)                                                    // 列出数据集
+		r.With(middleware.RequireMinRole("super_admin")).Post("/datasets", a.CreateDataset)    // 创建数据集
+		r.Get("/datasets/{id}", a.GetDataset)                                                 // 获取数据集详情
+		r.With(middleware.RequireMinRole("super_admin")).Put("/datasets/{id}", a.UpdateDataset) // 更新数据集
+		r.With(middleware.RequireMinRole("super_admin")).Delete("/datasets/{id}", a.DeleteDataset) // 删除数据集
+		r.With(middleware.RequireMinRole("super_admin")).Post("/datasets/{id}/grant", a.GrantDatasetAccess)   // 授权
+		r.With(middleware.RequireMinRole("super_admin")).Post("/datasets/{id}/revoke", a.RevokeDatasetAccess) // 撤销授权
+
+		// ====== 数据表管理路由 ======
+		r.Get("/datasets/{did}/tables", a.ListDatasetTables)                                                  // 列出表
+		r.With(middleware.RequireMinRole("data_admin")).Post("/datasets/{did}/tables", a.CreateDatasetTable)    // 创建表
+		r.Get("/datasets/{did}/tables/{tid}", a.GetDatasetTable)                                              // 获取表详情
+		r.With(middleware.RequireMinRole("data_admin")).Delete("/datasets/{did}/tables/{tid}", a.DeleteDatasetTable) // 删除表
+		r.Get("/datasets/{did}/tables/{tid}/fields", a.ListFields)                                            // 获取字段列表
 	})
 
 	// 返回配置好的路由器

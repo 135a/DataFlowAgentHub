@@ -77,8 +77,10 @@ func (s *InternalServer) TaskCallback(ctx context.Context, req *nlv1.TaskCallbac
 			} else {
 				msgContent = map[string]any{"error": req.GetErrorMessage(), "run_id": *runID}
 			}
-			msgJSON, _ := json.Marshal(msgContent)
-			if _, err := s.app.DB.Exec(ctx, `INSERT INTO messages (session_id, role, content) VALUES ($1::uuid, 'assistant', $2)`, sid, msgJSON); err != nil {
+			msgJSON, marshalErr := json.Marshal(msgContent)
+			if marshalErr != nil {
+				s.app.Log.Warn("marshal callback message content", zap.Error(marshalErr))
+			} else if _, err := s.app.DB.Exec(ctx, `INSERT INTO messages (session_id, role, content) VALUES ($1::uuid, 'assistant', $2)`, sid, msgJSON); err != nil {
 				s.app.Log.Error("insert callback message", zap.Error(err))
 			}
 			s.app.Bus.Publish(sid, ssebus.Event{Type: "result", Data: msgContent})
@@ -150,7 +152,11 @@ func (s *InternalServer) InternalNL2SQL(ctx context.Context, req *nlv1.InternalN
 		return &nlv1.InternalNL2SQLResponse{Ok: false, ErrorMessage: err.Error()}, nil
 	}
 
-	rowsJSON, _ := json.Marshal(result.Rows)
+	rowsJSON, marshalErr := json.Marshal(result.Rows)
+	if marshalErr != nil {
+		s.app.Log.Warn("marshal internal nl2sql rows", zap.Error(marshalErr))
+		rowsJSON = []byte("[]")
+	}
 	return &nlv1.InternalNL2SQLResponse{
 		Sql:     result.SQL,
 		RowsJson: string(rowsJSON),

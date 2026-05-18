@@ -17,12 +17,14 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"github.com/dataflowagenthub/hub/internal/async"
+	"github.com/dataflowagenthub/hub/internal/auth"
 	"github.com/dataflowagenthub/hub/internal/config"
 	nlv1 "github.com/dataflowagenthub/hub/internal/gen/nl2sql/v1"
 	"github.com/dataflowagenthub/hub/internal/grpcserver"
 	"github.com/dataflowagenthub/hub/internal/handlers"
 	"github.com/dataflowagenthub/hub/internal/llm"
 	"github.com/dataflowagenthub/hub/internal/migrate"
+	"github.com/dataflowagenthub/hub/internal/mysqlmgr"
 	"github.com/dataflowagenthub/hub/internal/nl2sqlexec"
 	"github.com/dataflowagenthub/hub/internal/otelsetup"
 	"github.com/dataflowagenthub/hub/internal/seed"
@@ -54,6 +56,13 @@ func main() {
 	if err != nil {
 		zl.Fatal("config", zap.Error(err))
 	}
+	// 校验配置值合法性
+	if err := cfg.Validate(); err != nil {
+		zl.Fatal("config validation", zap.Error(err))
+	}
+
+	// 设置 auth 包内部日志记录器
+	auth.SetRevokeLogger(zl)
 
 	// 创建上下文
 	ctx := context.Background()
@@ -105,6 +114,13 @@ func main() {
 		zl.Warn("nats connect failed, async tasks disabled", zap.Error(err))
 	}
 
+	// 创建 SSE 事件总线（环境变量 SSE_DRIVER=memory|redis 切换）
+	bus := ssebus.NewBus(rdb, zl)
+
+	// 创建异步任务客户端，传入 SSE 总线用于超时通知
+	asyncClient := async.NewClient(pool, nc, zl)
+	asyncClient.SetBus(bus)
+
 	// 创建 NL2SQL 执行器
 	nl2sqlExec := nl2sqlexec.NewExecutor(nl, cfg.QueryMaxRows, cfg.QueryTimeout)
 
@@ -114,6 +130,15 @@ func main() {
 		APIKey:  cfg.LLMAPIKey,
 	}
 
+	// 初始化 MySQL 连接管理器
+	mysqlCfg := mysqlmgr.MySQLConfig{
+		Host:     cfg.MySQLHost,
+		Port:     cfg.MySQLPort,
+		RootUser: cfg.MySQLRootUser,
+		RootPass: cfg.MySQLRootPass,
+	}
+	mysqlMgr := mysqlmgr.NewManager(mysqlCfg, zl)
+
 	// 初始化应用程序结构体
 	app := &handlers.App{
 		Cfg:        cfg,
@@ -121,11 +146,12 @@ func main() {
 		DB:         pool,
 		Redis:      rdb,
 		Nl2sql:     nl,
-		Bus:        func() *ssebus.Bus { b := ssebus.New(); b.SetLogger(zl); return b }(),
+		Bus:        bus,
 		NATS:       nc,
-		AsyncTask:  async.NewClient(pool, nc, zl),
+		AsyncTask:  asyncClient,
 		NL2SQLExec: nl2sqlExec,
 		LlmClient:  llmClient,
+		MySQLMgr:   mysqlMgr,
 	}
 
 	// 初始化 OpenTelemetry
@@ -159,48 +185,71 @@ func main() {
 	grpcOpts := []grpc.ServerOption{}
 
 	// 加载 mTLS 凭证
+	// 检查是否配置了 gRPC 服务器所需的证书文件路径
 	if cfg.GRPCServerCert != "" && cfg.GRPCServerKey != "" && cfg.GRPCCACert != "" {
+		// 加载服务器证书和私钥
 		serverCert, err := tls.LoadX509KeyPair(cfg.GRPCServerCert, cfg.GRPCServerKey)
 		if err != nil {
 			zl.Fatal("load grpc server cert", zap.Error(err))
 		}
+		// 读取 CA 证书文件
 		caCert, err := os.ReadFile(cfg.GRPCCACert)
 		if err != nil {
 			zl.Fatal("read grpc ca cert", zap.Error(err))
 		}
+		// 创建证书池并添加 CA 证书
 		caPool := x509.NewCertPool()
 		if !caPool.AppendCertsFromPEM(caCert) {
 			zl.Fatal("failed to parse CA certificate")
 		}
 
+		// 配置 TLS 参数
 		tlsCfg := &tls.Config{
-			Certificates: []tls.Certificate{serverCert},
-			ClientCAs:    caPool,
-			ClientAuth:   tls.RequireAndVerifyClientCert,
-			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{serverCert},  // 服务器证书
+			ClientCAs:    caPool,                         // CA 证书池
+			ClientAuth:   tls.RequireAndVerifyClientCert, // 要求客户端证书验证
+			MinVersion:   tls.VersionTLS12,               // 最低 TLS 版本为 1.2
 		}
+		// 将 TLS 凭证添加到 gRPC 选项中
 		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsCfg)))
 		zl.Info("grpc mTLS enabled", zap.String("ca_cert", cfg.GRPCCACert))
 	} else {
+		// 如果没有配置证书文件，则使用不安全连接
 		zl.Warn("grpc mTLS disabled (no cert paths configured), using insecure")
 	}
 
+	// 创建一个gRPC服务器实例
+	// grpc.NewServer()用于初始化一个新的gRPC服务器
+	// grpcOpts是一个可变参数列表，用于传递gRPC服务器的配置选项
+	// 这些选项可以包括认证、拦截器、最大消息大小等配置
 	grpcServer := grpc.NewServer(grpcOpts...)
+	// 将内部服务注册到 gRPC 服务器
+	// nlv1 是包含内部服务定义的包
+	// RegisterHubInternalServiceServer 是注册内部服务服务器的函数
+	// grpcServer 是 gRPC 服务器实例
+	// grpcserver.NewInternalServer(app) 创建一个新的内部服务器实例，app 是应用程序上下文
 	nlv1.RegisterHubInternalServiceServer(grpcServer, grpcserver.NewInternalServer(app))
 
+	// 创建gRPC服务监听器，监听指定的TCP地址
 	grpcLis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
+		// 如果监听失败，记录致命错误并终止程序
 		zl.Fatal("grpc listen", zap.Error(err))
 	}
+	// 使用goroutine启动gRPC服务
 	go func() {
+		// 记录gRPC服务启动信息，包括监听地址
 		zl.Info("grpc listening", zap.String("grpc_addr", cfg.GRPCAddr))
+		// 启动gRPC服务，如果服务出错，记录致命错误并终止程序
 		if err := grpcServer.Serve(grpcLis); err != nil {
 			zl.Fatal("grpc serve", zap.Error(err))
 		}
 	}()
 
 	// 设置信号处理，用于优雅关闭
+	// 创建一个带缓冲的通道，用于接收系统信号
 	sig := make(chan os.Signal, 1)
+	// 注册要监听的信号，包括SIGINT(中断)和SIGTERM(终止)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	zl.Info("shutting down...")
@@ -209,14 +258,18 @@ func main() {
 	grpcServer.GracefulStop()
 
 	// 再停 HTTP 服务端
+	// 创建一个15秒超时的上下文，用于优雅关闭HTTP服务
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+	defer cancel() // 确保上下文资源被释放
+	// 尝试优雅关闭HTTP服务，如果失败则记录警告日志
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		zl.Warn("http server shutdown", zap.Error(err))
 	}
 	// 关闭 OpenTelemetry
+	// 创建一个5秒超时的上下文，用于优雅关闭OpenTelemetry
 	otelCtx, otelCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer otelCancel()
+	defer otelCancel() // 确保上下文资源被释放
+	// 尝试优雅关闭OpenTelemetry，如果失败则记录警告日志
 	if err := otelShutdown(otelCtx); err != nil {
 		zl.Warn("otel shutdown", zap.Error(err))
 	}

@@ -28,7 +28,7 @@ func EnsureAdminUser(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config
 	}
 	tag, err := pool.Exec(ctx, `
 		INSERT INTO users (workspace_id, email, password_hash, role, name)
-		VALUES ($1, $2, $3, 'admin', '管理员')`,
+		VALUES ($1, $2, $3, 'super_admin', '管理员')`,
 		demoWorkspaceID, cfg.SeedEmail, string(hash),
 	)
 	if err != nil {

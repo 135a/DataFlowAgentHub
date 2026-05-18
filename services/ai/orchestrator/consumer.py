@@ -1,23 +1,13 @@
+from __future__ import annotations
 import asyncio
 import json
 import logging
 import os
 from nats.aio.client import Client as NATS
 from orchestrator.graph import workflow_graph
-from hub_ai.internal_client import HubInternalClient
+from hub_ai._client import get_client
 
 logger = logging.getLogger(__name__)
-
-
-# 全局 gRPC 客户端（惰性初始化）
-_internal_client: HubInternalClient | None = None
-
-
-def _get_internal_client() -> HubInternalClient:
-    global _internal_client
-    if _internal_client is None:
-        _internal_client = HubInternalClient()
-    return _internal_client
 
 
 async def process_message(msg):
@@ -29,7 +19,7 @@ async def process_message(msg):
         run_id = data.get("run_id", "")
         payload = data.get("payload", {})
 
-        logger.info(f"Processing task {task_id} (run_id: {run_id})")
+        logger.info("Processing task %s (run_id: %s)", task_id, run_id)
 
         # 构建初始状态
         initial_state = {
@@ -39,64 +29,78 @@ async def process_message(msg):
         }
         config = {"configurable": {"thread_id": session_id or task_id}}
 
-        # 在异步包装器内同步运行图，120s 超时
+        # 异步运行 LangGraph（ainvoke）, 120s 超时
         result = await asyncio.wait_for(
-            asyncio.to_thread(workflow_graph.invoke, initial_state, config),
-            timeout=120.0
+            workflow_graph.ainvoke(initial_state, config),
+            timeout=120.0,
         )
 
-        # 通过 gRPC 回调 Go API
+        # 通过 gRPC 回调 Go API（异步，无需 to_thread）
         callback_result = {
             "final_report": result.get("final_report", ""),
-            "analysis_summary": result.get("analysis_summary", "")
+            "analysis_summary": result.get("analysis_summary", ""),
         }
-        client = _get_internal_client()
-        await asyncio.to_thread(
-            client.task_callback,
+        client = await get_client()
+        await client.task_callback(
             task_id=task_id,
             status="succeeded",
             result=callback_result,
         )
-        logger.info(f"Task {task_id} callback successful via gRPC")
+        logger.info("Task %s callback successful via gRPC", task_id)
         await msg.ack()
 
     except Exception as e:
-        logger.error(f"Task processing failed: {e}", exc_info=True)
+        logger.error("Task processing failed: %s", e, exc_info=True)
         if task_id:
             try:
-                client = _get_internal_client()
-                await asyncio.to_thread(
-                    client.task_callback,
+                client = await get_client()
+                await client.task_callback(
                     task_id=task_id,
                     status="failed",
                     error_message=str(e),
                 )
             except Exception as cb_err:
-                logger.error(f"Failed to send failure callback via gRPC: {cb_err}")
+                logger.error("Failed to send failure callback via gRPC: %s", cb_err)
         try:
             await msg.nak()
         except Exception:
             pass
 
 
-async def run_consumer():
-    nc = NATS()
-    nats_url = os.environ.get("NATS_URL", "nats://localhost:4222")
+async def run_consumer(nats_url=None):
+    max_retries = 5
+    retry_delay = 1
+    nats_url = nats_url or os.environ.get("NATS_URL", "nats://localhost:4222")
 
-    try:
-        await nc.connect(nats_url)
-        logger.info(f"Connected to NATS at {nats_url}")
+    for attempt in range(max_retries):
+        nc = NATS()
+        try:
+            await nc.connect(nats_url)
+            logger.info("Connected to NATS at %s", nats_url)
 
-        await nc.subscribe("hub.tasks.agent_pipeline", cb=process_message)
+            await nc.subscribe("hub.tasks.agent_pipeline", cb=process_message)
+            logger.info("Subscribed to hub.tasks.agent_pipeline")
 
-        while True:
-            await asyncio.sleep(1)
+            await asyncio.Future()  # 保持运行
 
-    except Exception as e:
-        logger.error(f"NATS connection error: {e}")
-    finally:
-        if nc.is_connected:
-            await nc.drain()
+        except asyncio.CancelledError:
+            logger.info("NATS consumer cancelled")
+            if nc.is_connected:
+                await nc.drain()
+            break
+        except Exception as e:
+            logger.error(
+                "NATS connection attempt %d/%d failed: %s",
+                attempt + 1, max_retries, e,
+            )
+            if nc.is_connected:
+                await nc.drain()
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 30)  # 指数退避
+            else:
+                logger.error("All NATS reconnection attempts exhausted, giving up")
+                raise
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 interface JwtPayload {
@@ -21,20 +21,25 @@ function parseJwtPayload(token: string): JwtPayload | null {
 /** Return the workspace_id from the JWT token in localStorage. Redirects to /login if missing. */
 export function useWorkspaceId(): string {
   const navigate = useNavigate();
+  const [workspaceId, setWorkspaceId] = useState<string>("");
 
-  return useMemo(() => {
+  useEffect(() => {
     const token = localStorage.getItem("token");
     if (!token) {
       navigate("/login", { replace: true });
-      return "";
+      setWorkspaceId("");
+      return;
     }
     const payload = parseJwtPayload(token);
     if (!payload?.workspace_id) {
       navigate("/login", { replace: true });
-      return "";
+      setWorkspaceId("");
+      return;
     }
-    return payload.workspace_id;
+    setWorkspaceId(payload.workspace_id);
   }, [navigate]);
+
+  return workspaceId;
 }
 
 /** Non-hook version for use outside React components. */

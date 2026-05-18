@@ -49,6 +49,9 @@ func (a *App) ListKnowledgeDocs(w http.ResponseWriter, r *http.Request) {
 			"created_at": createdAt.UTC().Format(time.RFC3339),
 		})
 	}
+	if err := rows.Err(); err != nil {
+		a.Log.Warn("list knowledge docs rows iteration", zap.Error(err))
+	}
 
 	JSON(w, http.StatusOK, map[string]any{"docs": docs})
 }

@@ -2,18 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, Navigate } from "react-router-dom";
 import { apiJson } from "../api";
 import { useIsAdmin, useRole } from "../hooks/useRole";
-
-interface User {
-  id: string;
-  name: string;
-  phone: string;
-  role: string;
-  created_at: string;
-}
-
-interface UsersResponse {
-  users: User[];
-}
+import type { User, UsersResponse } from "../types/api";
 
 export function AdminUsersPage() {
   const token = useMemo(() => localStorage.getItem("token"), []);
@@ -45,14 +34,15 @@ export function AdminUsersPage() {
           name: String(fd.get("name") || ""),
           phone: String(fd.get("phone") || ""),
           password: String(fd.get("password") || ""),
-          role: String(fd.get("role") || "viewer"),
+          role: String(fd.get("role") || "read_only_visitor"),
         }),
       });
       setStatus("创建成功");
       setShowCreate(false);
       void load();
-    } catch (err: any) {
-      setStatus(`创建失败: ${err.message || err}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "创建失败";
+      setStatus(`创建失败: ${msg}`);
     }
     e.currentTarget.reset();
   };
@@ -65,8 +55,9 @@ export function AdminUsersPage() {
         body: JSON.stringify({ role: newRole }),
       });
       void load();
-    } catch (err: any) {
-      setStatus(`修改失败: ${err.message || err}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "修改失败";
+      setStatus(`修改失败: ${msg}`);
     }
   };
 
@@ -75,8 +66,9 @@ export function AdminUsersPage() {
       await apiJson(`/v1/users/${userId}`, { method: "DELETE", token });
       setConfirmDelete(null);
       void load();
-    } catch (err: any) {
-      setStatus(`删除失败: ${err.message || err}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "删除失败";
+      setStatus(`删除失败: ${msg}`);
     }
   };
 
@@ -88,7 +80,8 @@ export function AdminUsersPage() {
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1>用户管理</h1>
         <nav style={{ display: "flex", gap: 16 }}>
-          <Link to="/tables">数据库表</Link>
+          <Link to="/datasets">数据集</Link>
+          <Link to="/admin/upgrade-review">审批管理</Link>
           <Link to="/">返回</Link>
         </nav>
       </header>
@@ -116,9 +109,9 @@ export function AdminUsersPage() {
             </div>
             <div style={{ marginBottom: 8 }}>
               <label style={{ width: 80, display: "inline-block" }}>角色:</label>
-              <select name="role" defaultValue="viewer">
-                <option value="viewer">viewer（只读）</option>
-                <option value="operator">operator（可读写）</option>
+              <select name="role" defaultValue="read_only_visitor">
+                <option value="data_admin">data_admin（数据管理员）</option>
+                <option value="read_only_visitor">read_only_visitor（只读访客）</option>
               </select>
             </div>
             <button type="submit">创建</button>
@@ -144,7 +137,7 @@ export function AdminUsersPage() {
               <td>{u.name}</td>
               <td>{u.phone || "-"}</td>
               <td>
-                {u.role === "admin" ? (
+                {u.role === "super_admin" ? (
                   <span style={{ fontWeight: 600 }}>{u.role}</span>
                 ) : (
                   <select
@@ -152,15 +145,16 @@ export function AdminUsersPage() {
                     onChange={e => changeRole(u.id, e.target.value)}
                     style={{ fontSize: 12 }}
                   >
-                    <option value="admin">admin</option>
-                    <option value="operator">operator</option>
-                    <option value="viewer">viewer</option>
+                    <option value="super_admin">super_admin</option>
+                    <option value="data_admin">data_admin</option>
+                    <option value="normal_user">normal_user</option>
+                    <option value="read_only_visitor">read_only_visitor</option>
                   </select>
                 )}
               </td>
               <td>{u.created_at ? new Date(u.created_at).toLocaleString() : "-"}</td>
               <td>
-                {u.role !== "admin" && (
+                {u.role !== "super_admin" && (
                   confirmDelete === u.id ? (
                     <span style={{ fontSize: 12 }}>
                       确认删除？

@@ -4,6 +4,22 @@ import { apiJson } from "../api";
 import { useIsAdmin, useIsOperator } from "../hooks/useRole";
 import type { DataSource, DataSourcesResponse } from "../types/api";
 
+interface EditFormData {
+  name: string;
+  kind: string;
+  host: string;
+  port: number;
+  username: string;
+  password?: string;
+  database: string;
+  sslmode?: string;
+}
+
+interface TestResponse {
+  ok: boolean;
+  error?: string;
+}
+
 export function DataSourcesPage() {
   const token = useMemo(() => localStorage.getItem("token"), []);
   const isAdmin = useIsAdmin();
@@ -69,7 +85,7 @@ export function DataSourcesPage() {
     if (!editingId) return;
     setStatus("更新中...");
     try {
-      const body: any = { ...editForm };
+      const body: EditFormData = { ...editForm };
       if (!body.password) delete body.password; // 空密码表示不修改
       await apiJson(`/v1/data-sources/${editingId}`, {
         method: "PUT",
@@ -98,7 +114,7 @@ export function DataSourcesPage() {
     setTestingId(id);
     setTestResult("");
     try {
-      const j = await apiJson<any>(`/v1/data-sources/${id}/test`, { method: "POST", token });
+      const j = await apiJson<TestResponse>(`/v1/data-sources/${id}/test`, { method: "POST", token });
       setTestResult(j.ok ? "连接成功" : `连接失败: ${j.error || "unknown"}`);
     } catch {
       setTestResult("测试失败");

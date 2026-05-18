@@ -1,0 +1,61 @@
+.container {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.button {
+  padding: 6px 18px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 20px;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.4;
+}
+
+.buttonQuick {
+  border: 1.5px solid #2563EB;
+}
+
+.buttonDeep {
+  border: 1.5px solid #7C3AED;
+}
+
+.buttonActive {
+  color: #fff;
+}
+
+.buttonActiveQuick {
+  background: #2563EB;
+}
+
+.buttonActiveDeep {
+  background: #7C3AED;
+}
+
+.buttonInactive {
+  background: transparent;
+}
+
+.buttonInactiveQuick {
+  color: #2563EB;
+}
+
+.buttonInactiveDeep {
+  color: #7C3AED;
+}
+
+.subText {
+  font-size: 10px;
+  opacity: 0.65;
+}
+
+.subTextActive {
+  opacity: 0.9;
+}

@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { apiFetch } from "../api";
 
 export function LoginPage() {
@@ -34,6 +35,9 @@ export function LoginPage() {
         {err && <p style={{ color: "crimson" }}>{err}</p>}
         <button type="submit" style={{ marginTop: 12 }}>进入</button>
       </form>
+      <p style={{ marginTop: 12, fontSize: 14 }}>
+        <Link to="/register">没有账号？注册</Link>
+      </p>
       <p style={{ fontSize: 12, color: "#666" }}>开发环境默认走 Vite 代理到后端；生产设置 VITE_API_BASE_URL。</p>
     </div>
   );

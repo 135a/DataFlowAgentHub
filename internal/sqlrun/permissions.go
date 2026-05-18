@@ -3,41 +3,41 @@ package sqlrun
 import (
 	"fmt"
 	"strings"
-)
 
-// 角色等级映射（与 middleware.RequireMinRole 保持一致）
-var roleOrder = map[string]int{
-	"viewer":   1,
-	"operator": 2,
-	"admin":    3,
-}
+	"github.com/dataflowagenthub/hub/internal/rbac"
+)
 
 // 系统表黑名单 — schema 发现和 SQL 执行双端引用
 var systemTables = map[string]bool{
-	"users":           true,
-	"workspaces":      true,
-	"sessions":        true,
-	"messages":        true,
-	"runs":            true,
-	"audit_events":    true,
-	"async_tasks":     true,
-	"knowledge_docs":  true,
-	"data_sources":    true,
-	"agent_run_steps": true,
+	"users":               true,
+	"workspaces":          true,
+	"sessions":            true,
+	"messages":            true,
+	"runs":                true,
+	"audit_events":        true,
+	"async_tasks":         true,
+	"knowledge_docs":      true,
+	"data_sources":        true,
+	"agent_run_steps":     true,
+	"datasets":            true,
+	"dataset_permissions": true,
+	"dataset_tables":      true,
+	"table_fields":        true,
+	"permission_requests": true,
 }
 
 // 每种 SQL 类型所需的最低角色
 var minRoleForSQLType = map[SQLType]string{
-	SQLTypeSelect:      "viewer",
-	SQLTypeInsert:      "operator",
-	SQLTypeUpdate:      "operator",
-	SQLTypeCreateTable: "operator",
-	SQLTypeCreateDB:    "operator",
-	SQLTypeDelete:      "admin",
-	SQLTypeDrop:        "admin",
-	SQLTypeAlter:       "admin",
-	SQLTypeTruncate:    "admin",
-	SQLTypeUnknown:     "admin", // 未知类型仅允许 admin
+	SQLTypeSelect:      "read_only_visitor",
+	SQLTypeInsert:      "normal_user",
+	SQLTypeUpdate:      "normal_user",
+	SQLTypeCreateTable: "data_admin",
+	SQLTypeCreateDB:    "super_admin",
+	SQLTypeDelete:      "data_admin",
+	SQLTypeDrop:        "super_admin",
+	SQLTypeAlter:       "data_admin",
+	SQLTypeTruncate:    "data_admin",
+	SQLTypeUnknown:     "super_admin",
 }
 
 // IsSystemTable 检查表名是否在系统表黑名单中
@@ -77,8 +77,8 @@ func IsAllowedForRole(sqlType SQLType, role string) error {
 	if !ok {
 		return fmt.Errorf("unsupported SQL type: %s", sqlType)
 	}
-	if roleOrder[role] < roleOrder[minRole] {
-		return fmt.Errorf("角色 %s 无权执行 %s 操作（需要 %s 及以上）", role, sqlType, minRole)
+	if rbac.RoleOrder[role] < rbac.RoleOrder[minRole] {
+		return fmt.Errorf("role %s is not allowed to perform %s (requires %s or above)", role, sqlType, minRole)
 	}
 	return nil
 }

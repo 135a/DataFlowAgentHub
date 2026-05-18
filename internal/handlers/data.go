@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dataflowagenthub/hub/internal/auth"
 	"github.com/dataflowagenthub/hub/internal/middleware"
 	"github.com/dataflowagenthub/hub/internal/sqlrun"
 	"github.com/xuri/excelize/v2"
@@ -24,7 +26,9 @@ const importAsyncThreshold = 1000
 type uploadForm struct {
 	FileData    []byte
 	FileName    string
-	TargetTable string
+	DatasetID   string // 新: 数据集 ID
+	TableID     string // 新: 数据表 ID
+	TargetTable string // 旧: 目标表名（已弃用）
 	Operation   string // insert / update / create_table
 	AIHint      string
 }
@@ -37,9 +41,9 @@ type parseResult struct {
 	SQLStmts []string // SQL 文件专用
 }
 
-// UploadData 处理文件上传导入数据（operator+）
+// UploadData 处理文件上传导入数据（操作流程：选择数据集 → 选择数据表 → 上传）
 // POST /v1/data/upload
-// multipart/form-data: file, target_table, operation, ai_hint
+// multipart/form-data: file, dataset_id, table_id, operation, ai_hint
 func (a *App) UploadData(w http.ResponseWriter, r *http.Request) {
 	c := middleware.ClaimsFromContext(r.Context())
 	if c == nil {
@@ -47,9 +51,8 @@ func (a *App) UploadData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 仅 operator+ 可使用
 	if err := sqlrun.IsAllowedForRole(sqlrun.SQLTypeInsert, c.Role); err != nil {
-		errJSON(w, http.StatusForbidden, "仅 operator 及以上角色可导入数据")
+		errJSON(w, http.StatusForbidden, "insufficient permissions to import data")
 		return
 	}
 
@@ -59,7 +62,43 @@ func (a *App) UploadData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 解析文件内容
+	// 新流程：使用 dataset_id + table_id
+	if form.DatasetID != "" && form.TableID != "" {
+		a.uploadToDataset(w, r, form, c)
+		return
+	}
+
+	// 旧流程：使用 target_table（向后兼容）
+	if form.TargetTable != "" {
+		a.uploadToLegacy(w, r, form, c)
+		return
+	}
+
+	errJSON(w, http.StatusBadRequest, "dataset_id + table_id (new) or target_table (legacy) is required")
+}
+
+// uploadToDataset 新流程：上传到数据集内的指定表（MySQL）
+func (a *App) uploadToDataset(w http.ResponseWriter, r *http.Request, form uploadForm, c *auth.Claims) {
+	// 检查数据集访问权限
+	if !a.hasDatasetAccess(r.Context(), c.UserID, form.DatasetID, c.Role) {
+		errJSON(w, http.StatusForbidden, "no access to this dataset")
+		return
+	}
+
+	// 获取表元数据
+	var mysqlDB, mysqlTableName string
+	err := a.DB.QueryRow(r.Context(), `
+		SELECT d.mysql_database, dt.mysql_table_name
+		FROM dataset_tables dt
+		JOIN datasets d ON d.id = dt.dataset_id
+		WHERE dt.id = $1::uuid AND dt.dataset_id = $2::uuid AND dt.status = 'active'`,
+		form.TableID, form.DatasetID).Scan(&mysqlDB, &mysqlTableName)
+	if err != nil {
+		errJSON(w, http.StatusNotFound, "table not found in dataset")
+		return
+	}
+
+	// 解析文件
 	ext := strings.ToLower(filepath.Ext(form.FileName))
 	var parsed parseResult
 	switch ext {
@@ -68,36 +107,30 @@ func (a *App) UploadData(w http.ResponseWriter, r *http.Request) {
 	case ".xlsx":
 		parsed, err = parseXLSX(form.FileData)
 	case ".sql":
-		parsed, err = parseSQLFile(form.FileData)
+		errJSON(w, http.StatusBadRequest, "SQL file upload is not supported for dataset tables")
+		return
 	default:
-		errJSON(w, http.StatusBadRequest, "不支持的文件类型，仅支持 .csv / .xlsx / .sql")
+		errJSON(w, http.StatusBadRequest, "unsupported file type, only .csv / .xlsx are supported")
 		return
 	}
 	if err != nil {
-		errJSON(w, http.StatusBadRequest, "文件解析失败: "+err.Error())
+		errJSON(w, http.StatusBadRequest, "file parse failed: "+err.Error())
 		return
 	}
 
-	// SQL 文件走独立的执行路径
-	if ext == ".sql" {
-		a.executeSQLImport(w, r, form, parsed, c.Role)
-		return
-	}
-
-	// 获取目标表列结构
-	targetCols, err := a.getTableColumns(r, form.TargetTable)
+	// 从 table_fields 读取目标字段定义
+	targetCols, err := a.getDatasetTableFields(r, form.TableID)
 	if err != nil {
-		errJSON(w, http.StatusBadRequest, "目标表不存在或无法读取结构: "+err.Error())
+		errJSON(w, http.StatusBadRequest, "cannot read table fields: "+err.Error())
 		return
 	}
 
-	// AI 校验列名
+	// 校验列名
 	validation, err := a.validateColumns(r, form, parsed, targetCols)
 	if err != nil {
-		// AI 调用失败时降级为基本列名匹配
 		validation, err = basicColumnCheck(parsed.Columns, targetCols)
 		if err != nil {
-			errJSON(w, http.StatusBadRequest, "列名校验失败: "+err.Error())
+			errJSON(w, http.StatusBadRequest, "column validation failed: "+err.Error())
 			return
 		}
 	}
@@ -106,12 +139,81 @@ func (a *App) UploadData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 根据操作类型执行
+	// 获取 MySQL 连接池
+	pool, ok := a.MySQLMgr.GetPool(form.DatasetID)
+	if !ok {
+		pool, err = a.MySQLMgr.Connect(form.DatasetID, mysqlDB)
+		if err != nil {
+			a.Log.Error("connect mysql", zap.Error(err))
+			errJSON(w, http.StatusInternalServerError, "failed to connect to dataset database")
+			return
+		}
+	}
+
+	// 执行 INSERT
+	affected, execErr := a.executeMySQLInsert(r.Context(), pool, mysqlTableName, parsed.Columns, parsed.Rows, validation.ColumnMap)
+	if execErr != nil {
+		errJSON(w, http.StatusInternalServerError, "data import failed: "+execErr.Error())
+		return
+	}
+
+	JSON(w, http.StatusOK, map[string]any{
+		"ok":            true,
+		"rows_affected": affected,
+		"validation":    validation,
+	})
+}
+
+// uploadToLegacy 旧流程：上传到 PostgreSQL 中的指定表（向后兼容）
+func (a *App) uploadToLegacy(w http.ResponseWriter, r *http.Request, form uploadForm, c *auth.Claims) {
+	ext := strings.ToLower(filepath.Ext(form.FileName))
+	var parsed parseResult
+	var err error
+	switch ext {
+	case ".csv":
+		parsed, err = parseCSV(form.FileData)
+	case ".xlsx":
+		parsed, err = parseXLSX(form.FileData)
+	case ".sql":
+		parsed, err = parseSQLFile(form.FileData)
+	default:
+		errJSON(w, http.StatusBadRequest, "unsupported file type, only .csv / .xlsx / .sql are supported")
+		return
+	}
+	if err != nil {
+		errJSON(w, http.StatusBadRequest, "file parse failed: "+err.Error())
+		return
+	}
+
+	if ext == ".sql" {
+		a.executeSQLImport(w, r, form, parsed, c.Role)
+		return
+	}
+
+	targetCols, err := a.getTableColumns(r, form.TargetTable)
+	if err != nil {
+		errJSON(w, http.StatusBadRequest, "target table not found or cannot read schema: "+err.Error())
+		return
+	}
+
+	validation, err := a.validateColumns(r, form, parsed, targetCols)
+	if err != nil {
+		validation, err = basicColumnCheck(parsed.Columns, targetCols)
+		if err != nil {
+			errJSON(w, http.StatusBadRequest, "column validation failed: "+err.Error())
+			return
+		}
+	}
+	if !validation.OK {
+		errJSON(w, http.StatusBadRequest, validation.Error)
+		return
+	}
+
 	switch form.Operation {
 	case "insert":
-		affected, execErr := a.executeInsert(r, form.TargetTable, parsed.Columns, parsed.Rows, validation.ColumnMap)
+		affected, execErr := a.executeLegacyInsert(r, form.TargetTable, parsed.Columns, parsed.Rows, validation.ColumnMap)
 		if execErr != nil {
-			errJSON(w, http.StatusInternalServerError, "数据导入失败: "+execErr.Error())
+			errJSON(w, http.StatusInternalServerError, "data import failed: "+execErr.Error())
 			return
 		}
 		JSON(w, http.StatusOK, map[string]any{
@@ -119,11 +221,10 @@ func (a *App) UploadData(w http.ResponseWriter, r *http.Request) {
 			"rows_affected": affected,
 			"validation":    validation,
 		})
-
 	case "update":
-		affected, execErr := a.executeUpdate(r, form.TargetTable, parsed.Columns, parsed.Rows, validation.ColumnMap)
+		affected, execErr := a.executeLegacyUpdate(r, form.TargetTable, parsed.Columns, parsed.Rows, validation.ColumnMap)
 		if execErr != nil {
-			errJSON(w, http.StatusInternalServerError, "数据更新失败: "+execErr.Error())
+			errJSON(w, http.StatusInternalServerError, "data update failed: "+execErr.Error())
 			return
 		}
 		JSON(w, http.StatusOK, map[string]any{
@@ -131,27 +232,26 @@ func (a *App) UploadData(w http.ResponseWriter, r *http.Request) {
 			"rows_affected": affected,
 			"validation":    validation,
 		})
-
 	default:
-		errJSON(w, http.StatusBadRequest, "operation 必须为 insert 或 update")
+		errJSON(w, http.StatusBadRequest, "operation must be insert or update")
 	}
 }
 
 // parseUploadForm 解析 multipart 上传表单
 func parseUploadForm(r *http.Request) (uploadForm, error) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil { // 32MB
-		return uploadForm{}, fmt.Errorf("文件过大或解析失败")
+		return uploadForm{}, fmt.Errorf("file too large or parse failed")
 	}
 
 	f, header, err := r.FormFile("file")
 	if err != nil {
-		return uploadForm{}, fmt.Errorf("缺少 file 字段")
+		return uploadForm{}, fmt.Errorf("missing file field")
 	}
 	defer f.Close()
 
 	data, err := io.ReadAll(f)
 	if err != nil {
-		return uploadForm{}, fmt.Errorf("读取文件失败")
+		return uploadForm{}, fmt.Errorf("failed to read file")
 	}
 
 	op := strings.TrimSpace(r.FormValue("operation"))
@@ -159,12 +259,14 @@ func parseUploadForm(r *http.Request) (uploadForm, error) {
 		op = "insert"
 	}
 	if op != "insert" && op != "update" && op != "create_table" {
-		return uploadForm{}, fmt.Errorf("operation 必须为 insert/update/create_table")
+		return uploadForm{}, fmt.Errorf("operation must be insert/update/create_table")
 	}
 
 	return uploadForm{
 		FileData:    data,
 		FileName:    header.Filename,
+		DatasetID:   strings.TrimSpace(r.FormValue("dataset_id")),
+		TableID:     strings.TrimSpace(r.FormValue("table_id")),
 		TargetTable: strings.TrimSpace(r.FormValue("target_table")),
 		Operation:   op,
 		AIHint:      strings.TrimSpace(r.FormValue("ai_hint")),
@@ -177,10 +279,10 @@ func parseCSV(data []byte) (parseResult, error) {
 	r.LazyQuotes = true
 	records, err := r.ReadAll()
 	if err != nil {
-		return parseResult{}, fmt.Errorf("CSV 格式错误: %w", err)
+		return parseResult{}, fmt.Errorf("CSV format error: %w", err)
 	}
 	if len(records) < 1 {
-		return parseResult{}, fmt.Errorf("CSV 文件为空")
+		return parseResult{}, fmt.Errorf("CSV file is empty")
 	}
 	cols := records[0]
 	var rows [][]string
@@ -194,17 +296,17 @@ func parseCSV(data []byte) (parseResult, error) {
 func parseXLSX(data []byte) (parseResult, error) {
 	f, err := excelize.OpenReader(strings.NewReader(string(data)))
 	if err != nil {
-		return parseResult{}, fmt.Errorf("XLSX 解析失败: %w", err)
+		return parseResult{}, fmt.Errorf("XLSX parse failed: %w", err)
 	}
 	defer f.Close()
 
 	sheet := f.GetSheetName(0)
 	rows, err := f.GetRows(sheet)
 	if err != nil {
-		return parseResult{}, fmt.Errorf("读取 sheet 失败: %w", err)
+		return parseResult{}, fmt.Errorf("read sheet failed: %w", err)
 	}
 	if len(rows) < 1 {
-		return parseResult{}, fmt.Errorf("XLSX 文件为空")
+		return parseResult{}, fmt.Errorf("XLSX file is empty")
 	}
 	cols := rows[0]
 	var dataRows [][]string
@@ -218,7 +320,7 @@ func parseXLSX(data []byte) (parseResult, error) {
 func parseSQLFile(data []byte) (parseResult, error) {
 	raw := strings.TrimSpace(string(data))
 	if raw == "" {
-		return parseResult{}, fmt.Errorf("SQL 文件为空")
+		return parseResult{}, fmt.Errorf("SQL file is empty")
 	}
 	// 按 ; 分割并过滤空语句
 	parts := strings.Split(raw, ";")
@@ -230,15 +332,15 @@ func parseSQLFile(data []byte) (parseResult, error) {
 		}
 	}
 	if len(stmts) == 0 {
-		return parseResult{}, fmt.Errorf("SQL 文件中无有效语句")
+		return parseResult{}, fmt.Errorf("no valid SQL statements found")
 	}
 	return parseResult{SQLStmts: stmts, RowCount: len(stmts)}, nil
 }
 
-// getTableColumns 获取目标表的列信息
+// getTableColumns 获取 PostgreSQL 目标表的列信息（旧流程）
 func (a *App) getTableColumns(r *http.Request, tableName string) (map[string]string, error) {
 	if sqlrun.IsSystemTable(tableName) {
-		return nil, fmt.Errorf("无权操作系统表 %s", tableName)
+		return nil, fmt.Errorf("cannot operate on system table %s", tableName)
 	}
 	rows, err := a.DB.Query(r.Context(), `
 		SELECT column_name, data_type FROM information_schema.columns
@@ -256,10 +358,73 @@ func (a *App) getTableColumns(r *http.Request, tableName string) (map[string]str
 		}
 		cols[strings.ToLower(name)] = dtype
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate table columns: %w", err)
+	}
 	if len(cols) == 0 {
-		return nil, fmt.Errorf("表 %s 不存在或没有列", tableName)
+		return nil, fmt.Errorf("table %s does not exist or has no columns", tableName)
 	}
 	return cols, nil
+}
+
+// getDatasetTableFields 从 table_fields 表读取数据集的字段定义（新流程）
+func (a *App) getDatasetTableFields(r *http.Request, tableID string) (map[string]string, error) {
+	rows, err := a.DB.Query(r.Context(), `
+		SELECT name, field_type FROM table_fields
+		WHERE table_id = $1::uuid
+		ORDER BY ordinal_position ASC`, tableID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cols := make(map[string]string)
+	for rows.Next() {
+		var name, ftype string
+		if err := rows.Scan(&name, &ftype); err != nil {
+			return nil, err
+		}
+		cols[strings.ToLower(name)] = strings.ToLower(ftype)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate table fields: %w", err)
+	}
+	if len(cols) == 0 {
+		return nil, fmt.Errorf("table has no fields defined")
+	}
+	return cols, nil
+}
+
+// executeMySQLInsert 在 MySQL 连接池上执行批量 INSERT
+func (a *App) executeMySQLInsert(ctx context.Context, pool *sql.DB, table string, cols []string, rows [][]string, colMap map[string]string) (int64, error) {
+	var targetCols []string
+	var placeholders []string
+	for i, c := range cols {
+		mapped, ok := colMap[c]
+		if !ok {
+			mapped = c
+		}
+		targetCols = append(targetCols, mapped)
+		placeholders = append(placeholders, fmt.Sprintf("?", i+1))
+	}
+
+	colList := strings.Join(targetCols, ", ")
+	phList := strings.Join(placeholders, ", ")
+
+	var totalAffected int64
+	for _, row := range rows {
+		args := make([]any, len(row))
+		for i, v := range row {
+			args[i] = v
+		}
+		sqlStr := fmt.Sprintf("INSERT INTO `%s` (%s) VALUES (%s)", table, colList, phList)
+		res, err := pool.ExecContext(ctx, sqlStr, args...)
+		if err != nil {
+			return totalAffected, fmt.Errorf("row %d insert failed: %w", totalAffected+1, err)
+		}
+		n, _ := res.RowsAffected()
+		totalAffected += n
+	}
+	return totalAffected, nil
 }
 
 // columnValidation AI 校验结果
@@ -310,7 +475,7 @@ func (a *App) validateColumns(r *http.Request, form uploadForm, parsed parseResu
 	resp = extractJSON(resp)
 	var v columnValidation
 	if err := json.Unmarshal([]byte(resp), &v); err != nil {
-		return columnValidation{}, fmt.Errorf("AI 返回格式异常: %w", err)
+		return columnValidation{}, fmt.Errorf("AI returned unexpected format: %w", err)
 	}
 	return v, nil
 }
@@ -325,7 +490,7 @@ func basicColumnCheck(uploadCols []string, targetCols map[string]string) (column
 		} else {
 			return columnValidation{
 				OK:    false,
-				Error: fmt.Sprintf("列 %s 在目标表中不存在，可用的列：%v", uc, mapKeys(targetCols)),
+				Error: fmt.Sprintf("column %s not found in target table, available columns: %v", uc, mapKeys(targetCols)),
 			}, nil
 		}
 	}
@@ -338,10 +503,10 @@ func contextWithTimeout(r *http.Request, d time.Duration) (context.Context, cont
 	return ctx, cancel
 }
 
-// executeInsert 批量 INSERT 数据
-func (a *App) executeInsert(r *http.Request, table string, cols []string, rows [][]string, colMap map[string]string) (int64, error) {
+// executeLegacyInsert 批量 INSERT 数据（旧流程：PostgreSQL）
+func (a *App) executeLegacyInsert(r *http.Request, table string, cols []string, rows [][]string, colMap map[string]string) (int64, error) {
 	if sqlrun.IsSystemTable(table) {
-		return 0, fmt.Errorf("无权操作系统表 %s", table)
+		return 0, fmt.Errorf("cannot operate on system table %s", table)
 	}
 	if err := sqlrun.IsAllowedForRole(sqlrun.SQLTypeInsert, middleware.ClaimsFromContext(r.Context()).Role); err != nil {
 		return 0, err
@@ -371,24 +536,24 @@ func (a *App) executeInsert(r *http.Request, table string, cols []string, rows [
 		sql := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", table, colList, phList)
 		affected, err := sqlrun.ExecuteWrite(r.Context(), a.DB, sql, 30*time.Second)
 		if err != nil {
-			return totalAffected, fmt.Errorf("第 %d 行插入失败: %w", totalAffected+1, err)
+			return totalAffected, fmt.Errorf("row %d insert failed: %w", totalAffected+1, err)
 		}
 		totalAffected += affected
 	}
 	return totalAffected, nil
 }
 
-// executeUpdate 批量 UPDATE 数据（第一列作为主键条件）
-func (a *App) executeUpdate(r *http.Request, table string, cols []string, rows [][]string, colMap map[string]string) (int64, error) {
+// executeLegacyUpdate 批量 UPDATE 数据（旧流程：PostgreSQL）
+func (a *App) executeLegacyUpdate(r *http.Request, table string, cols []string, rows [][]string, colMap map[string]string) (int64, error) {
 	if sqlrun.IsSystemTable(table) {
-		return 0, fmt.Errorf("无权操作系统表 %s", table)
+		return 0, fmt.Errorf("cannot operate on system table %s", table)
 	}
 	if err := sqlrun.IsAllowedForRole(sqlrun.SQLTypeUpdate, middleware.ClaimsFromContext(r.Context()).Role); err != nil {
 		return 0, err
 	}
 
 	if len(cols) < 2 {
-		return 0, fmt.Errorf("UPDATE 模式需要至少两列（第一列为主键条件）")
+		return 0, fmt.Errorf("UPDATE mode requires at least two columns (first column as primary key condition)")
 	}
 
 	var totalAffected int64
@@ -418,7 +583,7 @@ func (a *App) executeUpdate(r *http.Request, table string, cols []string, rows [
 			table, strings.Join(sets, ", "), pkCol, argIdx)
 		affected, err := sqlrun.ExecuteWrite(r.Context(), a.DB, sql, 30*time.Second)
 		if err != nil {
-			return totalAffected, fmt.Errorf("第 %d 行更新失败: %w", totalAffected+1, err)
+			return totalAffected, fmt.Errorf("row %d update failed: %w", totalAffected+1, err)
 		}
 		totalAffected += affected
 	}
@@ -433,12 +598,12 @@ func (a *App) executeSQLImport(w http.ResponseWriter, r *http.Request, form uplo
 		sqlType := sqlrun.ClassifySQL(stmt)
 		if err := sqlrun.IsAllowedForRole(sqlType, role); err != nil {
 			errJSON(w, http.StatusForbidden,
-				fmt.Sprintf("第 %d 条语句：无权限执行 %s 操作", i+1, sqlType))
+				fmt.Sprintf("statement %d: no permission for %s operation", i+1, sqlType))
 			return
 		}
 		if tbl, ok := sqlrun.CheckSystemTableInSQL(stmt); ok {
 			errJSON(w, http.StatusForbidden,
-				fmt.Sprintf("第 %d 条语句：无权操作系统表 %s", i+1, tbl))
+				fmt.Sprintf("statement %d: cannot operate on system table %s", i+1, tbl))
 			return
 		}
 		affected, err := sqlrun.ExecuteWrite(r.Context(), a.DB, stmt, 30*time.Second)
@@ -467,124 +632,14 @@ func (a *App) executeSQLImport(w http.ResponseWriter, r *http.Request, form uplo
 	})
 }
 
-// SuggestTable AI 建议建表
-// POST /v1/data/suggest-table
-// Body: {"description": "用户描述", "ai_hint": "可选提示"}
+// SuggestTable 已禁用（动态建表不再支持）
 func (a *App) SuggestTable(w http.ResponseWriter, r *http.Request) {
-	c := middleware.ClaimsFromContext(r.Context())
-	if err := sqlrun.IsAllowedForRole(sqlrun.SQLTypeCreateTable, c.Role); err != nil {
-		errJSON(w, http.StatusForbidden, "仅 operator 及以上角色可建表")
-		return
-	}
-
-	var body struct {
-		Description string `json:"description"`
-		AIHint      string `json:"ai_hint"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		errJSON(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	if strings.TrimSpace(body.Description) == "" {
-		errJSON(w, http.StatusBadRequest, "description 为必填项")
-		return
-	}
-
-	if a.LlmClient == nil || a.LlmClient.APIKey == "" {
-		errJSON(w, http.StatusServiceUnavailable, "AI 服务未配置 (HUB_LLM_API_KEY)")
-		return
-	}
-
-	hint := ""
-	if body.AIHint != "" {
-		hint = "\n额外要求：" + body.AIHint
-	}
-
-	prompt := fmt.Sprintf(
-		`你是一个 PostgreSQL 数据库设计专家。根据用户描述设计表结构。
-
-用户描述：%s
-%s
-
-请返回 JSON（仅 JSON，无其他文字）：
-{
-  "table_name": "建议的表名（英文，snake_case）",
-  "columns": [
-    {"name": "列名", "type": "PostgreSQL类型", "nullable": true, "default": "默认值或空", "comment": "列说明"}
-  ],
-  "ddl": "完整的 CREATE TABLE DDL 语句",
-  "explanation": "设计说明（中文）"
-}`,
-		body.Description, hint)
-
-	ctx, cancel := contextWithTimeout(r, 20*time.Second)
-	defer cancel()
-	resp, err := a.LlmClient.ChatCompletion(ctx, a.Cfg.LLMModel, prompt)
-	if err != nil {
-		errJSON(w, http.StatusBadGateway, "AI 服务调用失败: "+err.Error())
-		return
-	}
-
-	resp = extractJSON(resp)
-	var suggestion map[string]any
-	if err := json.Unmarshal([]byte(resp), &suggestion); err != nil {
-		errJSON(w, http.StatusInternalServerError, "AI 返回格式异常: "+err.Error())
-		return
-	}
-
-	JSON(w, http.StatusOK, suggestion)
+	errJSON(w, http.StatusGone, "dynamic table creation is disabled. Use the dataset workflow: create a dataset first, then define tables with predefined fields.")
 }
 
-// CreateTable 用户确认后执行建表
-// POST /v1/data/create-table
-// Body: {"ddl": "CREATE TABLE ..."}
+// CreateTable 已禁用（动态建表不再支持）
 func (a *App) CreateTable(w http.ResponseWriter, r *http.Request) {
-	c := middleware.ClaimsFromContext(r.Context())
-	if err := sqlrun.IsAllowedForRole(sqlrun.SQLTypeCreateTable, c.Role); err != nil {
-		errJSON(w, http.StatusForbidden, "仅 operator 及以上角色可建表")
-		return
-	}
-
-	var body struct {
-		DDL string `json:"ddl"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		errJSON(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	ddl := strings.TrimSpace(body.DDL)
-	if ddl == "" {
-		errJSON(w, http.StatusBadRequest, "ddl 为必填项")
-		return
-	}
-
-	// 安全校验
-	sqlType := sqlrun.ClassifySQL(ddl)
-	if sqlType != sqlrun.SQLTypeCreateTable {
-		errJSON(w, http.StatusBadRequest, "仅允许 CREATE TABLE 操作")
-		return
-	}
-	if err := sqlrun.IsAllowedForRole(sqlType, c.Role); err != nil {
-		errJSON(w, http.StatusForbidden, err.Error())
-		return
-	}
-	if tbl, ok := sqlrun.CheckSystemTableInSQL(ddl); ok {
-		errJSON(w, http.StatusForbidden, fmt.Sprintf("无权操作系统表 %s", tbl))
-		return
-	}
-
-	affected, err := sqlrun.ExecuteWrite(r.Context(), a.DB, ddl, 30*time.Second)
-	if err != nil {
-		errJSON(w, http.StatusInternalServerError, "建表失败: "+err.Error())
-		return
-	}
-
-	JSON(w, http.StatusCreated, map[string]any{
-		"ok":      true,
-		"message": "表已创建，此操作不可回退",
-		"ddl":     ddl,
-		"rows":    affected,
-	})
+	errJSON(w, http.StatusGone, "dynamic table creation is disabled. Use the dataset workflow: create a dataset first, then define tables with predefined fields.")
 }
 
 // extractJSON 从 LLM 响应中提取 JSON 文本
@@ -638,7 +693,7 @@ func (a *App) ListTables(w http.ResponseWriter, r *http.Request) {
 	`)
 	if err != nil {
 		a.Log.Error("list tables query", zap.Error(err))
-		errJSON(w, http.StatusInternalServerError, "查询表结构失败")
+		errJSON(w, http.StatusInternalServerError, "failed to query table schema")
 		return
 	}
 	defer rows.Close()
@@ -650,7 +705,7 @@ func (a *App) ListTables(w http.ResponseWriter, r *http.Request) {
 		var rowEst int64
 		var lastVac *string
 		if err := rows.Scan(&tName, &cName, &cType, &nullable, &rowEst, &lastVac); err != nil {
-			errJSON(w, http.StatusInternalServerError, "读取表结构失败")
+			errJSON(w, http.StatusInternalServerError, "failed to read table schema")
 			return
 		}
 		if sqlrun.IsSystemTable(tName) {
@@ -678,7 +733,7 @@ func (a *App) ListTables(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		errJSON(w, http.StatusInternalServerError, "遍历表结构失败")
+		errJSON(w, http.StatusInternalServerError, "failed to iterate table schema")
 		return
 	}
 
