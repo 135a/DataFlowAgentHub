@@ -50,6 +50,16 @@ class NL2SQLServiceStub(object):
                 request_serializer=nl2sql_dot_v1_dot_nl2sql__pb2.HealthRequest.SerializeToString,
                 response_deserializer=nl2sql_dot_v1_dot_nl2sql__pb2.HealthResponse.FromString,
                 _registered_method=True)
+        self.RAGSearch = channel.unary_unary(
+                '/nl2sql.v1.NL2SQLService/RAGSearch',
+                request_serializer=nl2sql_dot_v1_dot_nl2sql__pb2.RAGSearchRequest.SerializeToString,
+                response_deserializer=nl2sql_dot_v1_dot_nl2sql__pb2.RAGSearchResponse.FromString,
+                _registered_method=True)
+        self.IndexDocument = channel.unary_unary(
+                '/nl2sql.v1.NL2SQLService/IndexDocument',
+                request_serializer=nl2sql_dot_v1_dot_nl2sql__pb2.IndexDocumentRequest.SerializeToString,
+                response_deserializer=nl2sql_dot_v1_dot_nl2sql__pb2.IndexDocumentResponse.FromString,
+                _registered_method=True)
 
 
 class NL2SQLServiceServicer(object):
@@ -74,6 +84,18 @@ class NL2SQLServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RAGSearch(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def IndexDocument(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_NL2SQLServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -91,6 +113,16 @@ def add_NL2SQLServiceServicer_to_server(servicer, server):
                     servicer.Health,
                     request_deserializer=nl2sql_dot_v1_dot_nl2sql__pb2.HealthRequest.FromString,
                     response_serializer=nl2sql_dot_v1_dot_nl2sql__pb2.HealthResponse.SerializeToString,
+            ),
+            'RAGSearch': grpc.unary_unary_rpc_method_handler(
+                    servicer.RAGSearch,
+                    request_deserializer=nl2sql_dot_v1_dot_nl2sql__pb2.RAGSearchRequest.FromString,
+                    response_serializer=nl2sql_dot_v1_dot_nl2sql__pb2.RAGSearchResponse.SerializeToString,
+            ),
+            'IndexDocument': grpc.unary_unary_rpc_method_handler(
+                    servicer.IndexDocument,
+                    request_deserializer=nl2sql_dot_v1_dot_nl2sql__pb2.IndexDocumentRequest.FromString,
+                    response_serializer=nl2sql_dot_v1_dot_nl2sql__pb2.IndexDocumentResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -175,6 +207,60 @@ class NL2SQLService(object):
             '/nl2sql.v1.NL2SQLService/Health',
             nl2sql_dot_v1_dot_nl2sql__pb2.HealthRequest.SerializeToString,
             nl2sql_dot_v1_dot_nl2sql__pb2.HealthResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RAGSearch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/nl2sql.v1.NL2SQLService/RAGSearch',
+            nl2sql_dot_v1_dot_nl2sql__pb2.RAGSearchRequest.SerializeToString,
+            nl2sql_dot_v1_dot_nl2sql__pb2.RAGSearchResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def IndexDocument(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/nl2sql.v1.NL2SQLService/IndexDocument',
+            nl2sql_dot_v1_dot_nl2sql__pb2.IndexDocumentRequest.SerializeToString,
+            nl2sql_dot_v1_dot_nl2sql__pb2.IndexDocumentResponse.FromString,
             options,
             channel_credentials,
             insecure,

@@ -1,6 +1,6 @@
 # DataFlowAgentHub 技术栈
 
-> 最后更新：2026-05-16 | commit `0fdb7ca`
+> 最后更新：2026-05-18 | MySQL 迁移完成
 
 ---
 
@@ -16,7 +16,7 @@
 ┌──────────────────────────────┴──────────────────────────────────────┐
 │                      控制面 (Go API :8080)                            │
 ├─────────────────────────────────────────────────────────────────────┤
-│  chi 路由  │  pgx/v5  │  go-redis  │  nats.go  │  gRPC Client       │
+│  chi 路由  │  go-sql-driver/mysql  │  go-redis  │  nats.go  │  gRPC Client  │
 │  JWT HS256 │  bcrypt  │  AES-256-GCM 加密                            │
 │  Prometheus │  OpenTelemetry (W3C) │  zap 结构化日志                  │
 │  Go embed 迁移  │  SSE 内存总线                                       │
@@ -64,7 +64,7 @@
 |------|------|------|
 | Go | 1.25 | 运行时 |
 | chi/v5 | v5.2 | HTTP 路由（轻量级） |
-| pgx/v5 | v5.7 | PostgreSQL 驱动（连接池） |
+| go-sql-driver/mysql | v1.9 | MySQL 驱动（database/sql） |
 | go-redis/v9 | v9.7 | Redis 客户端 |
 | nats.go | v1.37 | NATS 客户端（异步任务发布） |
 | google.golang.org/grpc | v1.80 | gRPC 客户端（调 Python） |
@@ -99,7 +99,7 @@
 
 | 组件 | 镜像/版本 | 用途 |
 |------|----------|------|
-| PostgreSQL | 16-alpine | 主数据库（workspaces、users、sessions、runs、approval_tasks、audit_events、knowledge_docs、async_tasks） |
+| MySQL | 8.x | 主数据库（workspaces、users、sessions、runs、approval_tasks、audit_events、knowledge_docs、async_tasks） |
 | Redis | 7-alpine | 限流 + Schema 缓存 |
 | ChromaDB | 0.5.20 | 向量数据库（RAG 知识库检索） |
 | NATS | 2.10-alpine (JetStream) | 异步消息队列 |
@@ -114,8 +114,8 @@
                         │
           ┌─────────────┼─────────────┐
           ▼             ▼             ▼
-     Postgres        Redis        NATS (JetStream)
-     (直连 pgx)    (go-redis)         │
+     MySQL          Redis        NATS (JetStream)
+     (database/sql) (go-redis)         │
                                       │ nats.go 发 / nats-py 收
                                       ▼
                              Python ai-worker :50051

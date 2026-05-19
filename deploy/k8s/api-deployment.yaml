@@ -1,0 +1,64 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hub-api
+  labels:
+    app: hub-api
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  selector:
+    app: hub-api
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hub-api
+  labels:
+    app: hub-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hub-api
+  template:
+    metadata:
+      labels:
+        app: hub-api
+    spec:
+      containers:
+        - name: api
+          image: hub-api:latest
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: hub-config
+            - secretRef:
+                name: hub-secret
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

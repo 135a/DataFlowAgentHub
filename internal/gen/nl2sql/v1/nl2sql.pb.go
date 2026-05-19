@@ -390,6 +390,354 @@ func (x *RunAgentPipelineResponse) GetFinalReport() string {
 	return ""
 }
 
+type RAGSearchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TraceId       string                 `protobuf:"bytes,1,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	WorkspaceId   string                 `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	Question      string                 `protobuf:"bytes,3,opt,name=question,proto3" json:"question,omitempty"`
+	TopK          int32                  `protobuf:"varint,4,opt,name=top_k,json=topK,proto3" json:"top_k,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RAGSearchRequest) Reset() {
+	*x = RAGSearchRequest{}
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RAGSearchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RAGSearchRequest) ProtoMessage() {}
+
+func (x *RAGSearchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RAGSearchRequest.ProtoReflect.Descriptor instead.
+func (*RAGSearchRequest) Descriptor() ([]byte, []int) {
+	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RAGSearchRequest) GetTraceId() string {
+	if x != nil {
+		return x.TraceId
+	}
+	return ""
+}
+
+func (x *RAGSearchRequest) GetWorkspaceId() string {
+	if x != nil {
+		return x.WorkspaceId
+	}
+	return ""
+}
+
+func (x *RAGSearchRequest) GetQuestion() string {
+	if x != nil {
+		return x.Question
+	}
+	return ""
+}
+
+func (x *RAGSearchRequest) GetTopK() int32 {
+	if x != nil {
+		return x.TopK
+	}
+	return 0
+}
+
+type RAGSearchResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Answer        string                 `protobuf:"bytes,2,opt,name=answer,proto3" json:"answer,omitempty"`
+	Sources       []*ChunkSource         `protobuf:"bytes,3,rep,name=sources,proto3" json:"sources,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,4,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RAGSearchResponse) Reset() {
+	*x = RAGSearchResponse{}
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RAGSearchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RAGSearchResponse) ProtoMessage() {}
+
+func (x *RAGSearchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RAGSearchResponse.ProtoReflect.Descriptor instead.
+func (*RAGSearchResponse) Descriptor() ([]byte, []int) {
+	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *RAGSearchResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *RAGSearchResponse) GetAnswer() string {
+	if x != nil {
+		return x.Answer
+	}
+	return ""
+}
+
+func (x *RAGSearchResponse) GetSources() []*ChunkSource {
+	if x != nil {
+		return x.Sources
+	}
+	return nil
+}
+
+func (x *RAGSearchResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+type ChunkSource struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	DocId         string                 `protobuf:"bytes,2,opt,name=doc_id,json=docId,proto3" json:"doc_id,omitempty"`
+	Title         string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
+	Distance      float64                `protobuf:"fixed64,4,opt,name=distance,proto3" json:"distance,omitempty"`
+	ChunkIndex    int32                  `protobuf:"varint,5,opt,name=chunk_index,json=chunkIndex,proto3" json:"chunk_index,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChunkSource) Reset() {
+	*x = ChunkSource{}
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChunkSource) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChunkSource) ProtoMessage() {}
+
+func (x *ChunkSource) ProtoReflect() protoreflect.Message {
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChunkSource.ProtoReflect.Descriptor instead.
+func (*ChunkSource) Descriptor() ([]byte, []int) {
+	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ChunkSource) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *ChunkSource) GetDocId() string {
+	if x != nil {
+		return x.DocId
+	}
+	return ""
+}
+
+func (x *ChunkSource) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *ChunkSource) GetDistance() float64 {
+	if x != nil {
+		return x.Distance
+	}
+	return 0
+}
+
+func (x *ChunkSource) GetChunkIndex() int32 {
+	if x != nil {
+		return x.ChunkIndex
+	}
+	return 0
+}
+
+type IndexDocumentRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TraceId       string                 `protobuf:"bytes,1,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	WorkspaceId   string                 `protobuf:"bytes,2,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	DocId         string                 `protobuf:"bytes,3,opt,name=doc_id,json=docId,proto3" json:"doc_id,omitempty"`
+	Title         string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`
+	TextContent   string                 `protobuf:"bytes,5,opt,name=text_content,json=textContent,proto3" json:"text_content,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IndexDocumentRequest) Reset() {
+	*x = IndexDocumentRequest{}
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IndexDocumentRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IndexDocumentRequest) ProtoMessage() {}
+
+func (x *IndexDocumentRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IndexDocumentRequest.ProtoReflect.Descriptor instead.
+func (*IndexDocumentRequest) Descriptor() ([]byte, []int) {
+	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *IndexDocumentRequest) GetTraceId() string {
+	if x != nil {
+		return x.TraceId
+	}
+	return ""
+}
+
+func (x *IndexDocumentRequest) GetWorkspaceId() string {
+	if x != nil {
+		return x.WorkspaceId
+	}
+	return ""
+}
+
+func (x *IndexDocumentRequest) GetDocId() string {
+	if x != nil {
+		return x.DocId
+	}
+	return ""
+}
+
+func (x *IndexDocumentRequest) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *IndexDocumentRequest) GetTextContent() string {
+	if x != nil {
+		return x.TextContent
+	}
+	return ""
+}
+
+type IndexDocumentResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	ChunkCount    int32                  `protobuf:"varint,2,opt,name=chunk_count,json=chunkCount,proto3" json:"chunk_count,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IndexDocumentResponse) Reset() {
+	*x = IndexDocumentResponse{}
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IndexDocumentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IndexDocumentResponse) ProtoMessage() {}
+
+func (x *IndexDocumentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IndexDocumentResponse.ProtoReflect.Descriptor instead.
+func (*IndexDocumentResponse) Descriptor() ([]byte, []int) {
+	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *IndexDocumentResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *IndexDocumentResponse) GetChunkCount() int32 {
+	if x != nil {
+		return x.ChunkCount
+	}
+	return 0
+}
+
+func (x *IndexDocumentResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
 type TaskCallbackRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
@@ -402,7 +750,7 @@ type TaskCallbackRequest struct {
 
 func (x *TaskCallbackRequest) Reset() {
 	*x = TaskCallbackRequest{}
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[6]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -414,7 +762,7 @@ func (x *TaskCallbackRequest) String() string {
 func (*TaskCallbackRequest) ProtoMessage() {}
 
 func (x *TaskCallbackRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[6]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -427,7 +775,7 @@ func (x *TaskCallbackRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskCallbackRequest.ProtoReflect.Descriptor instead.
 func (*TaskCallbackRequest) Descriptor() ([]byte, []int) {
-	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{6}
+	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *TaskCallbackRequest) GetTaskId() string {
@@ -467,7 +815,7 @@ type TaskCallbackResponse struct {
 
 func (x *TaskCallbackResponse) Reset() {
 	*x = TaskCallbackResponse{}
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[7]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -479,7 +827,7 @@ func (x *TaskCallbackResponse) String() string {
 func (*TaskCallbackResponse) ProtoMessage() {}
 
 func (x *TaskCallbackResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[7]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -492,7 +840,7 @@ func (x *TaskCallbackResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskCallbackResponse.ProtoReflect.Descriptor instead.
 func (*TaskCallbackResponse) Descriptor() ([]byte, []int) {
-	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{7}
+	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *TaskCallbackResponse) GetMessage() string {
@@ -516,7 +864,7 @@ type RunStepCallbackRequest struct {
 
 func (x *RunStepCallbackRequest) Reset() {
 	*x = RunStepCallbackRequest{}
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[8]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -528,7 +876,7 @@ func (x *RunStepCallbackRequest) String() string {
 func (*RunStepCallbackRequest) ProtoMessage() {}
 
 func (x *RunStepCallbackRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[8]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -541,7 +889,7 @@ func (x *RunStepCallbackRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunStepCallbackRequest.ProtoReflect.Descriptor instead.
 func (*RunStepCallbackRequest) Descriptor() ([]byte, []int) {
-	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{8}
+	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RunStepCallbackRequest) GetRunId() string {
@@ -595,7 +943,7 @@ type RunStepCallbackResponse struct {
 
 func (x *RunStepCallbackResponse) Reset() {
 	*x = RunStepCallbackResponse{}
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[9]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -607,7 +955,7 @@ func (x *RunStepCallbackResponse) String() string {
 func (*RunStepCallbackResponse) ProtoMessage() {}
 
 func (x *RunStepCallbackResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[9]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -620,7 +968,7 @@ func (x *RunStepCallbackResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunStepCallbackResponse.ProtoReflect.Descriptor instead.
 func (*RunStepCallbackResponse) Descriptor() ([]byte, []int) {
-	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{9}
+	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RunStepCallbackResponse) GetMessage() string {
@@ -642,7 +990,7 @@ type InternalNL2SQLRequest struct {
 
 func (x *InternalNL2SQLRequest) Reset() {
 	*x = InternalNL2SQLRequest{}
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[10]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -654,7 +1002,7 @@ func (x *InternalNL2SQLRequest) String() string {
 func (*InternalNL2SQLRequest) ProtoMessage() {}
 
 func (x *InternalNL2SQLRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[10]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -667,7 +1015,7 @@ func (x *InternalNL2SQLRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InternalNL2SQLRequest.ProtoReflect.Descriptor instead.
 func (*InternalNL2SQLRequest) Descriptor() ([]byte, []int) {
-	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{10}
+	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *InternalNL2SQLRequest) GetTraceId() string {
@@ -711,7 +1059,7 @@ type InternalNL2SQLResponse struct {
 
 func (x *InternalNL2SQLResponse) Reset() {
 	*x = InternalNL2SQLResponse{}
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[11]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -723,7 +1071,7 @@ func (x *InternalNL2SQLResponse) String() string {
 func (*InternalNL2SQLResponse) ProtoMessage() {}
 
 func (x *InternalNL2SQLResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[11]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -736,7 +1084,7 @@ func (x *InternalNL2SQLResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InternalNL2SQLResponse.ProtoReflect.Descriptor instead.
 func (*InternalNL2SQLResponse) Descriptor() ([]byte, []int) {
-	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{11}
+	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *InternalNL2SQLResponse) GetSql() string {
@@ -787,7 +1135,7 @@ type KnowledgeDocCallbackRequest struct {
 
 func (x *KnowledgeDocCallbackRequest) Reset() {
 	*x = KnowledgeDocCallbackRequest{}
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[12]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -799,7 +1147,7 @@ func (x *KnowledgeDocCallbackRequest) String() string {
 func (*KnowledgeDocCallbackRequest) ProtoMessage() {}
 
 func (x *KnowledgeDocCallbackRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[12]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -812,7 +1160,7 @@ func (x *KnowledgeDocCallbackRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeDocCallbackRequest.ProtoReflect.Descriptor instead.
 func (*KnowledgeDocCallbackRequest) Descriptor() ([]byte, []int) {
-	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{12}
+	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *KnowledgeDocCallbackRequest) GetDocId() string {
@@ -859,7 +1207,7 @@ type KnowledgeDocCallbackResponse struct {
 
 func (x *KnowledgeDocCallbackResponse) Reset() {
 	*x = KnowledgeDocCallbackResponse{}
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[13]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -871,7 +1219,7 @@ func (x *KnowledgeDocCallbackResponse) String() string {
 func (*KnowledgeDocCallbackResponse) ProtoMessage() {}
 
 func (x *KnowledgeDocCallbackResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[13]
+	mi := &file_nl2sql_v1_nl2sql_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -884,7 +1232,7 @@ func (x *KnowledgeDocCallbackResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeDocCallbackResponse.ProtoReflect.Descriptor instead.
 func (*KnowledgeDocCallbackResponse) Descriptor() ([]byte, []int) {
-	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{13}
+	return file_nl2sql_v1_nl2sql_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *KnowledgeDocCallbackResponse) GetMessage() string {
@@ -927,7 +1275,35 @@ const file_nl2sql_v1_nl2sql_proto_rawDesc = "" +
 	"\x18RunAgentPipelineResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12#\n" +
 	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12!\n" +
-	"\ffinal_report\x18\x03 \x01(\tR\vfinalReport\"\x8c\x01\n" +
+	"\ffinal_report\x18\x03 \x01(\tR\vfinalReport\"\x81\x01\n" +
+	"\x10RAGSearchRequest\x12\x19\n" +
+	"\btrace_id\x18\x01 \x01(\tR\atraceId\x12!\n" +
+	"\fworkspace_id\x18\x02 \x01(\tR\vworkspaceId\x12\x1a\n" +
+	"\bquestion\x18\x03 \x01(\tR\bquestion\x12\x13\n" +
+	"\x05top_k\x18\x04 \x01(\x05R\x04topK\"\x92\x01\n" +
+	"\x11RAGSearchResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x16\n" +
+	"\x06answer\x18\x02 \x01(\tR\x06answer\x120\n" +
+	"\asources\x18\x03 \x03(\v2\x16.nl2sql.v1.ChunkSourceR\asources\x12#\n" +
+	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage\"\x91\x01\n" +
+	"\vChunkSource\x12\x18\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent\x12\x15\n" +
+	"\x06doc_id\x18\x02 \x01(\tR\x05docId\x12\x14\n" +
+	"\x05title\x18\x03 \x01(\tR\x05title\x12\x1a\n" +
+	"\bdistance\x18\x04 \x01(\x01R\bdistance\x12\x1f\n" +
+	"\vchunk_index\x18\x05 \x01(\x05R\n" +
+	"chunkIndex\"\xa4\x01\n" +
+	"\x14IndexDocumentRequest\x12\x19\n" +
+	"\btrace_id\x18\x01 \x01(\tR\atraceId\x12!\n" +
+	"\fworkspace_id\x18\x02 \x01(\tR\vworkspaceId\x12\x15\n" +
+	"\x06doc_id\x18\x03 \x01(\tR\x05docId\x12\x14\n" +
+	"\x05title\x18\x04 \x01(\tR\x05title\x12!\n" +
+	"\ftext_content\x18\x05 \x01(\tR\vtextContent\"m\n" +
+	"\x15IndexDocumentResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x1f\n" +
+	"\vchunk_count\x18\x02 \x01(\x05R\n" +
+	"chunkCount\x12#\n" +
+	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"\x8c\x01\n" +
 	"\x13TaskCallbackRequest\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1f\n" +
@@ -966,11 +1342,13 @@ const file_nl2sql_v1_nl2sql_proto_rawDesc = "" +
 	"chunkCount\x12#\n" +
 	"\rerror_message\x18\x05 \x01(\tR\ferrorMessage\"8\n" +
 	"\x1cKnowledgeDocCallbackResponse\x12\x18\n" +
-	"\amessage\x18\x01 \x01(\tR\amessage2\xf9\x01\n" +
+	"\amessage\x18\x01 \x01(\tR\amessage2\x95\x03\n" +
 	"\rNL2SQLService\x12L\n" +
 	"\vGenerateSQL\x12\x1d.nl2sql.v1.GenerateSQLRequest\x1a\x1e.nl2sql.v1.GenerateSQLResponse\x12[\n" +
 	"\x10RunAgentPipeline\x12\".nl2sql.v1.RunAgentPipelineRequest\x1a#.nl2sql.v1.RunAgentPipelineResponse\x12=\n" +
-	"\x06Health\x12\x18.nl2sql.v1.HealthRequest\x1a\x19.nl2sql.v1.HealthResponse2\xff\x02\n" +
+	"\x06Health\x12\x18.nl2sql.v1.HealthRequest\x1a\x19.nl2sql.v1.HealthResponse\x12F\n" +
+	"\tRAGSearch\x12\x1b.nl2sql.v1.RAGSearchRequest\x1a\x1c.nl2sql.v1.RAGSearchResponse\x12R\n" +
+	"\rIndexDocument\x12\x1f.nl2sql.v1.IndexDocumentRequest\x1a .nl2sql.v1.IndexDocumentResponse2\xff\x02\n" +
 	"\x12HubInternalService\x12O\n" +
 	"\fTaskCallback\x12\x1e.nl2sql.v1.TaskCallbackRequest\x1a\x1f.nl2sql.v1.TaskCallbackResponse\x12X\n" +
 	"\x0fRunStepCallback\x12!.nl2sql.v1.RunStepCallbackRequest\x1a\".nl2sql.v1.RunStepCallbackResponse\x12U\n" +
@@ -989,7 +1367,7 @@ func file_nl2sql_v1_nl2sql_proto_rawDescGZIP() []byte {
 	return file_nl2sql_v1_nl2sql_proto_rawDescData
 }
 
-var file_nl2sql_v1_nl2sql_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_nl2sql_v1_nl2sql_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_nl2sql_v1_nl2sql_proto_goTypes = []any{
 	(*HealthRequest)(nil),                // 0: nl2sql.v1.HealthRequest
 	(*HealthResponse)(nil),               // 1: nl2sql.v1.HealthResponse
@@ -997,35 +1375,45 @@ var file_nl2sql_v1_nl2sql_proto_goTypes = []any{
 	(*GenerateSQLResponse)(nil),          // 3: nl2sql.v1.GenerateSQLResponse
 	(*RunAgentPipelineRequest)(nil),      // 4: nl2sql.v1.RunAgentPipelineRequest
 	(*RunAgentPipelineResponse)(nil),     // 5: nl2sql.v1.RunAgentPipelineResponse
-	(*TaskCallbackRequest)(nil),          // 6: nl2sql.v1.TaskCallbackRequest
-	(*TaskCallbackResponse)(nil),         // 7: nl2sql.v1.TaskCallbackResponse
-	(*RunStepCallbackRequest)(nil),       // 8: nl2sql.v1.RunStepCallbackRequest
-	(*RunStepCallbackResponse)(nil),      // 9: nl2sql.v1.RunStepCallbackResponse
-	(*InternalNL2SQLRequest)(nil),        // 10: nl2sql.v1.InternalNL2SQLRequest
-	(*InternalNL2SQLResponse)(nil),       // 11: nl2sql.v1.InternalNL2SQLResponse
-	(*KnowledgeDocCallbackRequest)(nil),  // 12: nl2sql.v1.KnowledgeDocCallbackRequest
-	(*KnowledgeDocCallbackResponse)(nil), // 13: nl2sql.v1.KnowledgeDocCallbackResponse
+	(*RAGSearchRequest)(nil),             // 6: nl2sql.v1.RAGSearchRequest
+	(*RAGSearchResponse)(nil),            // 7: nl2sql.v1.RAGSearchResponse
+	(*ChunkSource)(nil),                  // 8: nl2sql.v1.ChunkSource
+	(*IndexDocumentRequest)(nil),         // 9: nl2sql.v1.IndexDocumentRequest
+	(*IndexDocumentResponse)(nil),        // 10: nl2sql.v1.IndexDocumentResponse
+	(*TaskCallbackRequest)(nil),          // 11: nl2sql.v1.TaskCallbackRequest
+	(*TaskCallbackResponse)(nil),         // 12: nl2sql.v1.TaskCallbackResponse
+	(*RunStepCallbackRequest)(nil),       // 13: nl2sql.v1.RunStepCallbackRequest
+	(*RunStepCallbackResponse)(nil),      // 14: nl2sql.v1.RunStepCallbackResponse
+	(*InternalNL2SQLRequest)(nil),        // 15: nl2sql.v1.InternalNL2SQLRequest
+	(*InternalNL2SQLResponse)(nil),       // 16: nl2sql.v1.InternalNL2SQLResponse
+	(*KnowledgeDocCallbackRequest)(nil),  // 17: nl2sql.v1.KnowledgeDocCallbackRequest
+	(*KnowledgeDocCallbackResponse)(nil), // 18: nl2sql.v1.KnowledgeDocCallbackResponse
 }
 var file_nl2sql_v1_nl2sql_proto_depIdxs = []int32{
-	2,  // 0: nl2sql.v1.NL2SQLService.GenerateSQL:input_type -> nl2sql.v1.GenerateSQLRequest
-	4,  // 1: nl2sql.v1.NL2SQLService.RunAgentPipeline:input_type -> nl2sql.v1.RunAgentPipelineRequest
-	0,  // 2: nl2sql.v1.NL2SQLService.Health:input_type -> nl2sql.v1.HealthRequest
-	6,  // 3: nl2sql.v1.HubInternalService.TaskCallback:input_type -> nl2sql.v1.TaskCallbackRequest
-	8,  // 4: nl2sql.v1.HubInternalService.RunStepCallback:input_type -> nl2sql.v1.RunStepCallbackRequest
-	10, // 5: nl2sql.v1.HubInternalService.InternalNL2SQL:input_type -> nl2sql.v1.InternalNL2SQLRequest
-	12, // 6: nl2sql.v1.HubInternalService.KnowledgeDocCallback:input_type -> nl2sql.v1.KnowledgeDocCallbackRequest
-	3,  // 7: nl2sql.v1.NL2SQLService.GenerateSQL:output_type -> nl2sql.v1.GenerateSQLResponse
-	5,  // 8: nl2sql.v1.NL2SQLService.RunAgentPipeline:output_type -> nl2sql.v1.RunAgentPipelineResponse
-	1,  // 9: nl2sql.v1.NL2SQLService.Health:output_type -> nl2sql.v1.HealthResponse
-	7,  // 10: nl2sql.v1.HubInternalService.TaskCallback:output_type -> nl2sql.v1.TaskCallbackResponse
-	9,  // 11: nl2sql.v1.HubInternalService.RunStepCallback:output_type -> nl2sql.v1.RunStepCallbackResponse
-	11, // 12: nl2sql.v1.HubInternalService.InternalNL2SQL:output_type -> nl2sql.v1.InternalNL2SQLResponse
-	13, // 13: nl2sql.v1.HubInternalService.KnowledgeDocCallback:output_type -> nl2sql.v1.KnowledgeDocCallbackResponse
-	7,  // [7:14] is the sub-list for method output_type
-	0,  // [0:7] is the sub-list for method input_type
-	0,  // [0:0] is the sub-list for extension type_name
-	0,  // [0:0] is the sub-list for extension extendee
-	0,  // [0:0] is the sub-list for field type_name
+	8,  // 0: nl2sql.v1.RAGSearchResponse.sources:type_name -> nl2sql.v1.ChunkSource
+	2,  // 1: nl2sql.v1.NL2SQLService.GenerateSQL:input_type -> nl2sql.v1.GenerateSQLRequest
+	4,  // 2: nl2sql.v1.NL2SQLService.RunAgentPipeline:input_type -> nl2sql.v1.RunAgentPipelineRequest
+	0,  // 3: nl2sql.v1.NL2SQLService.Health:input_type -> nl2sql.v1.HealthRequest
+	6,  // 4: nl2sql.v1.NL2SQLService.RAGSearch:input_type -> nl2sql.v1.RAGSearchRequest
+	9,  // 5: nl2sql.v1.NL2SQLService.IndexDocument:input_type -> nl2sql.v1.IndexDocumentRequest
+	11, // 6: nl2sql.v1.HubInternalService.TaskCallback:input_type -> nl2sql.v1.TaskCallbackRequest
+	13, // 7: nl2sql.v1.HubInternalService.RunStepCallback:input_type -> nl2sql.v1.RunStepCallbackRequest
+	15, // 8: nl2sql.v1.HubInternalService.InternalNL2SQL:input_type -> nl2sql.v1.InternalNL2SQLRequest
+	17, // 9: nl2sql.v1.HubInternalService.KnowledgeDocCallback:input_type -> nl2sql.v1.KnowledgeDocCallbackRequest
+	3,  // 10: nl2sql.v1.NL2SQLService.GenerateSQL:output_type -> nl2sql.v1.GenerateSQLResponse
+	5,  // 11: nl2sql.v1.NL2SQLService.RunAgentPipeline:output_type -> nl2sql.v1.RunAgentPipelineResponse
+	1,  // 12: nl2sql.v1.NL2SQLService.Health:output_type -> nl2sql.v1.HealthResponse
+	7,  // 13: nl2sql.v1.NL2SQLService.RAGSearch:output_type -> nl2sql.v1.RAGSearchResponse
+	10, // 14: nl2sql.v1.NL2SQLService.IndexDocument:output_type -> nl2sql.v1.IndexDocumentResponse
+	12, // 15: nl2sql.v1.HubInternalService.TaskCallback:output_type -> nl2sql.v1.TaskCallbackResponse
+	14, // 16: nl2sql.v1.HubInternalService.RunStepCallback:output_type -> nl2sql.v1.RunStepCallbackResponse
+	16, // 17: nl2sql.v1.HubInternalService.InternalNL2SQL:output_type -> nl2sql.v1.InternalNL2SQLResponse
+	18, // 18: nl2sql.v1.HubInternalService.KnowledgeDocCallback:output_type -> nl2sql.v1.KnowledgeDocCallbackResponse
+	10, // [10:19] is the sub-list for method output_type
+	1,  // [1:10] is the sub-list for method input_type
+	1,  // [1:1] is the sub-list for extension type_name
+	1,  // [1:1] is the sub-list for extension extendee
+	0,  // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_nl2sql_v1_nl2sql_proto_init() }
@@ -1039,7 +1427,7 @@ func file_nl2sql_v1_nl2sql_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nl2sql_v1_nl2sql_proto_rawDesc), len(file_nl2sql_v1_nl2sql_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

@@ -96,6 +96,31 @@ func (w *NL2SQLClient) RunAgentPipeline(ctx context.Context, traceID, sessionID,
 	})
 }
 
+func (w *NL2SQLClient) RAGSearch(ctx context.Context, traceID, workspaceID, question string, topK int32) (*nlv1.RAGSearchResponse, error) {
+	md := metadata.Pairs("x-trace-id", traceID)
+	ctx = metadata.NewOutgoingContext(ctx, md)
+	ctx = injectTraceContext(ctx)
+	return w.c.RAGSearch(ctx, &nlv1.RAGSearchRequest{
+		TraceId:     traceID,
+		WorkspaceId: workspaceID,
+		Question:    question,
+		TopK:        topK,
+	})
+}
+
+func (w *NL2SQLClient) IndexDocument(ctx context.Context, traceID, workspaceID, docID, title, textContent string) (*nlv1.IndexDocumentResponse, error) {
+	md := metadata.Pairs("x-trace-id", traceID)
+	ctx = metadata.NewOutgoingContext(ctx, md)
+	ctx = injectTraceContext(ctx)
+	return w.c.IndexDocument(ctx, &nlv1.IndexDocumentRequest{
+		TraceId:     traceID,
+		WorkspaceId: workspaceID,
+		DocId:       docID,
+		Title:       title,
+		TextContent: textContent,
+	})
+}
+
 func (w *NL2SQLClient) Health(ctx context.Context) (*nlv1.HealthResponse, error) {
 	return w.c.Health(ctx, &nlv1.HealthRequest{})
 }

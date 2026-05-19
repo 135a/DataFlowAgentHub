@@ -220,7 +220,7 @@ class HubInternalClient:
         user_message: str,
         schema_json: str = "",
         trace_id: str = "",
-        dialect: str = "postgres",
+        dialect: str = "mysql",
     ) -> dict:
         """Call Go's NL2SQL executor (async)."""
         req = InternalNL2SQLRequest(
@@ -247,7 +247,7 @@ class HubInternalClient:
         user_message: str,
         schema_json: str = "",
         trace_id: str = "",
-        dialect: str = "postgres",
+        dialect: str = "mysql",
     ) -> dict:
         """Synchronous version of internal_nl2sql."""
         req = InternalNL2SQLRequest(

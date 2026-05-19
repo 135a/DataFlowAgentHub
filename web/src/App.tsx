@@ -1,357 +1,55 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { apiFetch, apiJson } from "./api";
+import { useSession } from "./contexts/SessionContext";
+import { useQuery } from "./contexts/QueryContext";
+import { useProgress } from "./contexts/ProgressContext";
+import { SessionProvider } from "./contexts/SessionContext";
+import { QueryProvider } from "./contexts/QueryContext";
+import { ProgressProvider } from "./contexts/ProgressContext";
+import { useSendMessage } from "./hooks/useSendMessage";
 import { useIsSuperAdmin, useIsDataAdmin, useIsNormalUser } from "./hooks/useRole";
-import { useSSE } from "./hooks/useSSE";
-import { ModeSelector } from "./components/ModeSelector";
-import { ProgressPanel } from "./components/ProgressPanel";
-import { QuerySourceSelector } from "./components/QuerySourceSelector";
-import type { QuerySource } from "./components/QuerySourceSelector";
-import { DataManagementPanel } from "./components/DataManagementPanel";
 import { SessionSidebar } from "./components/SessionSidebar";
-import { MessageBlock, RunStepsPanel } from "./components/ChatPanel";
-import type { StepDef, StepState } from "./components/ProgressPanel";
-import type {
-  Session,
-  ApiMessage,
-  RunStep,
-  SessionsResponse,
-  MessagesResponse,
-  Dataset,
-  DatasetsResponse,
-} from "./types/api";
+import { QuerySourceSelector } from "./components/QuerySourceSelector";
+import { DataManagementPanel } from "./components/DataManagementPanel";
+import { ProgressPanel } from "./components/ProgressPanel";
+import { ChatInput } from "./components/ChatInput";
+import { MessageList } from "./components/MessageList";
+import { KnowledgeQueryStatus } from "./components/KnowledgeQueryStatus";
 import styles from "./App.module.css";
+import type { QuerySource } from "./components/QuerySourceSelector";
 
-type QueryMode = "quick" | "deep";
-
-const QUICK_STEPS: StepDef[] = [
-  { name: "SQL 生成", weight: 0.7 },
-  { name: "执行查询", weight: 0.3 },
-];
-
-const DEEP_STEPS: StepDef[] = [
-  { name: "SQL 生成", weight: 0.15 },
-  { name: "数据分析", weight: 0.25 },
-  { name: "图表绘制", weight: 0.40 },
-  { name: "报告生成", weight: 0.20 },
-];
-
-const AGENT_STEP_MAP: Record<string, number> = {
-  nl2sql_node: 0,
-  analysis_node: 1,
-  chart_node: 2,
-  report_node: 3,
-};
-
-const STEP_DEFAULTS: Record<string, number> = {
-  "SQL 生成": 2000,
-  "执行查询": 300,
-  "数据分析": 3500,
-  "图表绘制": 4500,
-  "报告生成": 2000,
-};
-
-function loadStepHistory(): Record<string, number[]> {
-  try {
-    return JSON.parse(localStorage.getItem("stepHistory") || "{}");
-  } catch {
-    return {};
-  }
-}
-
-function getAvgDuration(history: Record<string, number[]>, stepName: string): number {
-  const durations = history[stepName];
-  if (!durations || durations.length === 0) return STEP_DEFAULTS[stepName] || 2000;
-  return durations.reduce((a, b) => a + b, 0) / durations.length;
-}
-
-function calcInitialEstimate(steps: StepDef[], history: Record<string, number[]>): number {
-  return steps.reduce((total, s) => total + getAvgDuration(history, s.name), 0);
-}
-
-function makeWaitingStates(n: number): StepState[] {
-  return Array.from({ length: n }, (_, i) => ({
-    status: i === 0 ? "running" as const : "waiting" as const,
-    durationMs: 0,
-  }));
-}
-
-function fmtModeDesc(mode: QueryMode): string {
+function fmtModeDesc(mode: "quick" | "deep"): string {
   return mode === "quick"
     ? "⚡ 快速查询：AI 生成 SQL 并直接执行返回结果，预计等待 1-3 秒，适合简单数据查询"
     : "🔬 深度分析：AI 将依次执行 SQL 生成 → 数据分析 → 图表绘制 → 报告生成，预计等待 5-15 秒，适合复杂数据分析";
 }
 
-export function App() {
-  const token = useMemo(() => localStorage.getItem("token"), []);
+function AppContent() {
+  const {
+    token,
+    sessions,
+    sid,
+    messages,
+    runSteps,
+    sendStatus,
+    sending,
+    setSid,
+    loadSessions,
+  } = useSession();
+  const {
+    mode,
+    querySource,
+    datasets,
+    selectedDatasetId,
+    handleSourceChange,
+    handleModeChange,
+    setSelectedDatasetId,
+  } = useQuery();
+  const { isProcessing, currentSteps, stepStates, elapsedMs, estimatedRemainingMs } = useProgress();
+  const { send } = useSendMessage();
+
   const isSuperAdmin = useIsSuperAdmin();
   const isDataAdmin = useIsDataAdmin();
   const isNormalUser = useIsNormalUser();
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [sid, setSid] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ApiMessage[]>([]);
-  const [runSteps, setRunSteps] = useState<RunStep[]>([]);
-  const [sendStatus, setSendStatus] = useState<string>("");
-  const [mode, setMode] = useState<QueryMode>(() => {
-    return (localStorage.getItem("queryMode") as QueryMode) || "deep";
-  });
-  const [sending, setSending] = useState(false);
-
-  // ---- query source selector state ----
-  const [querySource, setQuerySource] = useState<QuerySource>(() => {
-    return (localStorage.getItem("querySource") as QuerySource) || "knowledge";
-  });
-  const [datasets, setDatasets] = useState<Dataset[]>([]);
-  const [selectedDatasetId, setSelectedDatasetId] = useState("");
-
-  // ---- progress tracking state ----
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [currentSteps, setCurrentSteps] = useState<StepDef[]>([]);
-  const [stepStates, setStepStates] = useState<StepState[]>([]);
-  const [elapsedMs, setElapsedMs] = useState(0);
-  const [estimatedRemainingMs, setEstimatedRemainingMs] = useState<number | null>(null);
-  const timerRef = useRef<number | null>(null);
-  const sendStartRef = useRef(0);
-  const stepTimestampsRef = useRef<number[]>([]);
-
-  function stopTimer() {
-    if (timerRef.current !== null) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  }
-
-  function startTimer() {
-    stopTimer();
-    sendStartRef.current = Date.now();
-    setElapsedMs(0);
-    timerRef.current = window.setInterval(() => {
-      setElapsedMs(Date.now() - sendStartRef.current);
-    }, 200);
-  }
-
-  function saveStepHistory(durations: number[]) {
-    try {
-      const history = loadStepHistory();
-      currentSteps.forEach((s, i) => {
-        const arr = history[s.name] || [];
-        arr.push(durations[i]);
-        history[s.name] = arr;
-      });
-      localStorage.setItem("stepHistory", JSON.stringify(history));
-    } catch { /* ignore storage errors */ }
-  }
-
-  function updateStepByIndex(idx: number, status: StepState["status"]) {
-    setStepStates(prev => {
-      const next = [...prev];
-      next[idx] = { ...next[idx], status };
-      return next;
-    });
-  }
-
-  function updateStepDuration(idx: number) {
-    const elapsed = Date.now() - sendStartRef.current;
-    setStepStates(prev => {
-      const next = [...prev];
-      next[idx] = { ...next[idx], durationMs: elapsed };
-      return next;
-    });
-  }
-
-  function completeStep(idx: number) {
-    updateStepDuration(idx);
-    updateStepByIndex(idx, "completed");
-    setStepStates(prev => {
-      const next = [...prev];
-      if (idx + 1 < next.length) {
-        next[idx + 1] = { ...next[idx + 1], status: "running", durationMs: 0 };
-      }
-      return next;
-    });
-    stepTimestampsRef.current[idx] = Date.now() - sendStartRef.current;
-    setStepStates(prev => {
-      const completedDurations = prev
-        .map((st, i) => ({ st, weight: currentSteps[i]?.weight ?? 0, idx: i }))
-        .filter(x => x.st.status === "completed" && x.st.durationMs > 0);
-      if (completedDurations.length > 0) {
-        const totalWeight = completedDurations.reduce((s, x) => s + x.weight, 0);
-        const totalTime = completedDurations.reduce((s, x) => s + x.st.durationMs, 0);
-        const avgPerWeight = totalTime / totalWeight;
-        const remainingWeight = currentSteps.slice(idx + 1).reduce((s, x) => s + x.weight, 0);
-        setEstimatedRemainingMs(avgPerWeight * remainingWeight);
-      }
-      return prev;
-    });
-  }
-
-  function finishProcessing() {
-    stopTimer();
-    const durations = currentSteps.map((_, i) => stepTimestampsRef.current[i] || 0);
-    saveStepHistory(durations);
-    setIsProcessing(false);
-  }
-
-  // ---- end progress tracking ----
-
-  const loadSessions = useCallback(async () => {
-    try {
-      const j = await apiJson<SessionsResponse>("/v1/sessions", { token: token! });
-      setSessions(j.sessions || []);
-    } catch { /* sessions load failure is non-fatal */ }
-  }, [token]);
-
-  useEffect(() => {
-    void loadSessions();
-  }, [loadSessions]);
-
-  const loadMessages = useCallback(async () => {
-    if (!sid || !token) return;
-    try {
-      const j = await apiJson<MessagesResponse>(`/v1/sessions/${sid}/messages`, { token });
-      setMessages(j.messages || []);
-      setRunSteps(j.run_steps || []);
-    } catch {
-      setMessages([]);
-      setRunSteps([]);
-    }
-  }, [sid, token]);
-
-  useEffect(() => {
-    void loadMessages();
-  }, [loadMessages]);
-
-  // ---- load datasets ----
-  useEffect(() => {
-    if (!token) return;
-    apiJson<DatasetsResponse>("/v1/datasets", { token })
-      .then(j => setDatasets(j.datasets || []))
-      .catch(() => {});
-  }, [token]);
-
-  function handleSourceChange(newSource: QuerySource) {
-    setQuerySource(newSource);
-    localStorage.setItem("querySource", newSource);
-    if (newSource === "knowledge") {
-      setSelectedDatasetId("");
-    }
-  }
-
-  function handleModeChange(newMode: QueryMode) {
-    setMode(newMode);
-    localStorage.setItem("queryMode", newMode);
-  }
-
-  // --- SSE hook ---
-  const sseCallbacks = useMemo(() => ({
-    onResult: () => {
-      setSendStatus("完成");
-      setSending(false);
-      setStepStates(prev => {
-        const next = [...prev];
-        for (let i = 0; i < next.length; i++) {
-          if (next[i].status !== "completed") {
-            next[i] = { ...next[i], status: "completed", durationMs: Date.now() - sendStartRef.current };
-            stepTimestampsRef.current[i] = Date.now() - sendStartRef.current;
-          }
-        }
-        return next;
-      });
-      setTimeout(() => finishProcessing(), 500);
-      loadMessages();
-    },
-    onAgentStep: (step: RunStep) => {
-      const idx = AGENT_STEP_MAP[step.agent_name];
-      if (idx === undefined) return;
-      if (step.status === "running") {
-        updateStepDuration(idx);
-        setStepStates(prev => {
-          const next = [...prev];
-          next[idx] = { ...next[idx], status: "running", durationMs: 0 };
-          return next;
-        });
-      } else if (step.status === "succeeded") {
-        completeStep(idx);
-      } else if (step.status === "failed") {
-        updateStepDuration(idx);
-        updateStepByIndex(idx, "error");
-      }
-    },
-    onSqlGenerated: () => {
-      completeStep(0);
-    },
-    onError: (message: string) => {
-      setSendStatus(`错误: ${message}`);
-      updateStepByIndex(0, "error");
-      setTimeout(() => finishProcessing(), 300);
-      loadMessages();
-    },
-  }), [loadMessages]);
-
-  const { startSSE, stopSSE } = useSSE(token!, sseCallbacks);
-
-  useEffect(() => {
-    return () => stopSSE();
-  }, [stopSSE]);
-
-  async function send(text: string) {
-    if (!sid || !token) return;
-    setSendStatus("");
-    setSending(true);
-
-    // dataset 模式：使用 step 进度跟踪
-    // knowledge 模式：只显示 spinner，无进度面板
-    if (querySource === "dataset") {
-      const steps = mode === "deep" ? DEEP_STEPS : QUICK_STEPS;
-      setCurrentSteps(steps);
-      const initialStates = makeWaitingStates(steps.length);
-      setStepStates(initialStates);
-      stepTimestampsRef.current = [];
-      const history = loadStepHistory();
-      const initialEstimate = calcInitialEstimate(steps, history);
-      setEstimatedRemainingMs(initialEstimate);
-      setIsProcessing(true);
-      startTimer();
-    }
-
-    const workflow = mode === "deep" ? "agent_pipeline" : "auto";
-    try {
-      const r = await apiFetch(`/v1/sessions/${sid}/messages`, {
-        method: "POST",
-        token,
-        body: JSON.stringify({ text, workflow }),
-      });
-
-      if (r.status === 202) {
-        startSSE(sid);
-      } else if (r.ok) {
-        if (querySource === "dataset") {
-          const steps = mode === "deep" ? DEEP_STEPS : QUICK_STEPS;
-          for (let i = 0; i < steps.length; i++) {
-            stepTimestampsRef.current[i] = Date.now() - sendStartRef.current;
-          }
-          setStepStates(prev => prev.map(st => ({ ...st, status: "completed" as const })));
-        }
-        setSending(false);
-        if (querySource === "dataset") {
-          setTimeout(() => finishProcessing(), 500);
-        }
-        await loadMessages();
-      } else {
-        setSendStatus(`${r.status}`);
-        setSending(false);
-        if (querySource === "dataset") {
-          setTimeout(() => finishProcessing(), 300);
-        }
-      }
-    } catch {
-      setSendStatus("网络错误，请重试");
-      setSending(false);
-      if (querySource === "dataset") {
-        setTimeout(() => finishProcessing(), 300);
-      }
-    }
-  }
 
   return (
     <div className={styles.container}>
@@ -376,7 +74,7 @@ export function App() {
       <SessionSidebar
         sessions={sessions}
         sid={sid}
-        token={token!}
+        token={token}
         onSelect={setSid}
         onSessionsChanged={loadSessions}
         datasetId={selectedDatasetId || undefined}
@@ -387,7 +85,7 @@ export function App() {
         <section>
           <h2>消息</h2>
 
-          <QuerySourceSelector value={querySource} onChange={handleSourceChange} />
+          <QuerySourceSelector value={querySource} onChange={(v: QuerySource) => handleSourceChange(v)} />
 
           {querySource === "dataset" && (
             <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
@@ -409,34 +107,20 @@ export function App() {
 
           {isDataAdmin && querySource === "dataset" && (
             <DataManagementPanel
-              token={token!}
+              token={token}
               onTableListChanged={loadSessions}
               datasetId={selectedDatasetId || undefined}
             />
           )}
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              const fd = new FormData(e.currentTarget);
-              const t = String(fd.get("t") || "");
-              void send(t);
-              e.currentTarget.reset();
-            }}
-          >
-            {querySource === "dataset" && <ModeSelector mode={mode} onChange={handleModeChange} />}
-            <div className={styles.inputRow}>
-              <input
-                name="t"
-                placeholder={querySource === "dataset" ? "例如：how many rows in demo_sales" : "请输入知识库查询问题"}
-                className={styles.textInput}
-                disabled={sending}
-              />
-              <button type="submit" className={styles.sendButton} disabled={sending || (querySource === "dataset" && !selectedDatasetId)}>
-                {sending ? "处理中..." : "发送"}
-              </button>
-            </div>
-          </form>
+          <ChatInput
+            onSend={send}
+            sending={sending}
+            querySource={querySource}
+            mode={mode}
+            selectedDatasetId={selectedDatasetId}
+            onModeChange={handleModeChange}
+          />
 
           {querySource === "dataset" && isProcessing && (
             <ProgressPanel
@@ -447,13 +131,7 @@ export function App() {
             />
           )}
 
-          {querySource === "knowledge" && sending && (
-            <div style={{ padding: "12px 0", display: "flex", alignItems: "center", gap: 8 }}>
-              <span className={styles.spinner} />
-              <span style={{ fontSize: 14, color: "#555" }}>正在检索知识库...</span>
-              <span style={{ fontSize: 12, color: "#999" }}>预计等待 2-5 秒</span>
-            </div>
-          )}
+          <KnowledgeQueryStatus visible={querySource === "knowledge" && sending} />
 
           {sendStatus && (
             <p className={`${styles.statusText} ${sendStatus.startsWith("错误") ? styles.statusError : styles.statusInfo}`}>
@@ -469,14 +147,21 @@ export function App() {
             </p>
           )}
 
-          <div className={styles.messagesContainer}>
-            {messages.map((m) => (
-              <MessageBlock key={m.id} msg={m} />
-            ))}
-            <RunStepsPanel steps={runSteps} />
-          </div>
+          <MessageList messages={messages} runSteps={runSteps} />
         </section>
       )}
     </div>
+  );
+}
+
+export function App() {
+  return (
+    <SessionProvider>
+      <QueryProvider>
+        <ProgressProvider>
+          <AppContent />
+        </ProgressProvider>
+      </QueryProvider>
+    </SessionProvider>
   );
 }

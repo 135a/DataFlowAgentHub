@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x16nl2sql/v1/nl2sql.proto\x12\tnl2sql.v1\"\x0f\n\rHealthRequest\"-\n\x0eHealthResponse\x12\x0f\n\x07version\x18\x01 \x01(\t\x12\n\n\x02ok\x18\x02 \x01(\x08\"v\n\x12GenerateSQLRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x12\n\nsession_id\x18\x02 \x01(\t\x12\x14\n\x0cuser_message\x18\x03 \x01(\t\x12\x13\n\x0bschema_json\x18\x04 \x01(\t\x12\x0f\n\x07\x64ialect\x18\x05 \x01(\t\"_\n\x13GenerateSQLResponse\x12\x0b\n\x03sql\x18\x01 \x01(\t\x12\x18\n\x10self_check_notes\x18\x02 \x01(\t\x12\n\n\x02ok\x18\x03 \x01(\x08\x12\x15\n\rerror_message\x18\x04 \x01(\t\"z\n\x17RunAgentPipelineRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x12\n\nsession_id\x18\x02 \x01(\t\x12\x0e\n\x06run_id\x18\x03 \x01(\t\x12\x14\n\x0cuser_message\x18\x04 \x01(\t\x12\x13\n\x0bschema_json\x18\x05 \x01(\t\"S\n\x18RunAgentPipelineResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x15\n\rerror_message\x18\x02 \x01(\t\x12\x14\n\x0c\x66inal_report\x18\x03 \x01(\t\"b\n\x13TaskCallbackRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x13\n\x0bresult_json\x18\x03 \x01(\t\x12\x15\n\rerror_message\x18\x04 \x01(\t\"\'\n\x14TaskCallbackResponse\x12\x0f\n\x07message\x18\x01 \x01(\t\"\x92\x01\n\x16RunStepCallbackRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x12\n\nagent_name\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\x12\x15\n\rinput_summary\x18\x04 \x01(\t\x12\x16\n\x0eoutput_summary\x18\x05 \x01(\t\x12\x15\n\rerror_message\x18\x06 \x01(\t\"*\n\x17RunStepCallbackResponse\x12\x0f\n\x07message\x18\x01 \x01(\t\"e\n\x15InternalNL2SQLRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x14\n\x0cuser_message\x18\x02 \x01(\t\x12\x13\n\x0bschema_json\x18\x03 \x01(\t\x12\x0f\n\x07\x64ialect\x18\x04 \x01(\t\"j\n\x16InternalNL2SQLResponse\x12\x0b\n\x03sql\x18\x01 \x01(\t\x12\x11\n\trows_json\x18\x02 \x01(\t\x12\r\n\x05notes\x18\x03 \x01(\t\x12\n\n\x02ok\x18\x04 \x01(\x08\x12\x15\n\rerror_message\x18\x05 \x01(\t\"\x80\x01\n\x1bKnowledgeDocCallbackRequest\x12\x0e\n\x06\x64oc_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x15\n\rchroma_doc_id\x18\x03 \x01(\t\x12\x13\n\x0b\x63hunk_count\x18\x04 \x01(\x05\x12\x15\n\rerror_message\x18\x05 \x01(\t\"/\n\x1cKnowledgeDocCallbackResponse\x12\x0f\n\x07message\x18\x01 \x01(\t2\xf9\x01\n\rNL2SQLService\x12L\n\x0bGenerateSQL\x12\x1d.nl2sql.v1.GenerateSQLRequest\x1a\x1e.nl2sql.v1.GenerateSQLResponse\x12[\n\x10RunAgentPipeline\x12\".nl2sql.v1.RunAgentPipelineRequest\x1a#.nl2sql.v1.RunAgentPipelineResponse\x12=\n\x06Health\x12\x18.nl2sql.v1.HealthRequest\x1a\x19.nl2sql.v1.HealthResponse2\xff\x02\n\x12HubInternalService\x12O\n\x0cTaskCallback\x12\x1e.nl2sql.v1.TaskCallbackRequest\x1a\x1f.nl2sql.v1.TaskCallbackResponse\x12X\n\x0fRunStepCallback\x12!.nl2sql.v1.RunStepCallbackRequest\x1a\".nl2sql.v1.RunStepCallbackResponse\x12U\n\x0eInternalNL2SQL\x12 .nl2sql.v1.InternalNL2SQLRequest\x1a!.nl2sql.v1.InternalNL2SQLResponse\x12g\n\x14KnowledgeDocCallback\x12&.nl2sql.v1.KnowledgeDocCallbackRequest\x1a\'.nl2sql.v1.KnowledgeDocCallbackResponseB=Z;github.com/dataflowagenthub/hub/internal/gen/nl2sql/v1;nlv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x16nl2sql/v1/nl2sql.proto\x12\tnl2sql.v1\"\x0f\n\rHealthRequest\"-\n\x0eHealthResponse\x12\x0f\n\x07version\x18\x01 \x01(\t\x12\n\n\x02ok\x18\x02 \x01(\x08\"v\n\x12GenerateSQLRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x12\n\nsession_id\x18\x02 \x01(\t\x12\x14\n\x0cuser_message\x18\x03 \x01(\t\x12\x13\n\x0bschema_json\x18\x04 \x01(\t\x12\x0f\n\x07\x64ialect\x18\x05 \x01(\t\"_\n\x13GenerateSQLResponse\x12\x0b\n\x03sql\x18\x01 \x01(\t\x12\x18\n\x10self_check_notes\x18\x02 \x01(\t\x12\n\n\x02ok\x18\x03 \x01(\x08\x12\x15\n\rerror_message\x18\x04 \x01(\t\"z\n\x17RunAgentPipelineRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x12\n\nsession_id\x18\x02 \x01(\t\x12\x0e\n\x06run_id\x18\x03 \x01(\t\x12\x14\n\x0cuser_message\x18\x04 \x01(\t\x12\x13\n\x0bschema_json\x18\x05 \x01(\t\"S\n\x18RunAgentPipelineResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x15\n\rerror_message\x18\x02 \x01(\t\x12\x14\n\x0c\x66inal_report\x18\x03 \x01(\t\"[\n\x10RAGSearchRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x14\n\x0cworkspace_id\x18\x02 \x01(\t\x12\x10\n\x08question\x18\x03 \x01(\t\x12\r\n\x05top_k\x18\x04 \x01(\x05\"o\n\x11RAGSearchResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0e\n\x06\x61nswer\x18\x02 \x01(\t\x12\'\n\x07sources\x18\x03 \x03(\x0b\x32\x16.nl2sql.v1.ChunkSource\x12\x15\n\rerror_message\x18\x04 \x01(\t\"d\n\x0b\x43hunkSource\x12\x0f\n\x07\x63ontent\x18\x01 \x01(\t\x12\x0e\n\x06\x64oc_id\x18\x02 \x01(\t\x12\r\n\x05title\x18\x03 \x01(\t\x12\x10\n\x08\x64istance\x18\x04 \x01(\x01\x12\x13\n\x0b\x63hunk_index\x18\x05 \x01(\x05\"s\n\x14IndexDocumentRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x14\n\x0cworkspace_id\x18\x02 \x01(\t\x12\x0e\n\x06\x64oc_id\x18\x03 \x01(\t\x12\r\n\x05title\x18\x04 \x01(\t\x12\x14\n\x0ctext_content\x18\x05 \x01(\t\"O\n\x15IndexDocumentResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x13\n\x0b\x63hunk_count\x18\x02 \x01(\x05\x12\x15\n\rerror_message\x18\x03 \x01(\t\"b\n\x13TaskCallbackRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x13\n\x0bresult_json\x18\x03 \x01(\t\x12\x15\n\rerror_message\x18\x04 \x01(\t\"\'\n\x14TaskCallbackResponse\x12\x0f\n\x07message\x18\x01 \x01(\t\"\x92\x01\n\x16RunStepCallbackRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x12\n\nagent_name\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\x12\x15\n\rinput_summary\x18\x04 \x01(\t\x12\x16\n\x0eoutput_summary\x18\x05 \x01(\t\x12\x15\n\rerror_message\x18\x06 \x01(\t\"*\n\x17RunStepCallbackResponse\x12\x0f\n\x07message\x18\x01 \x01(\t\"e\n\x15InternalNL2SQLRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x14\n\x0cuser_message\x18\x02 \x01(\t\x12\x13\n\x0bschema_json\x18\x03 \x01(\t\x12\x0f\n\x07\x64ialect\x18\x04 \x01(\t\"j\n\x16InternalNL2SQLResponse\x12\x0b\n\x03sql\x18\x01 \x01(\t\x12\x11\n\trows_json\x18\x02 \x01(\t\x12\r\n\x05notes\x18\x03 \x01(\t\x12\n\n\x02ok\x18\x04 \x01(\x08\x12\x15\n\rerror_message\x18\x05 \x01(\t\"\x80\x01\n\x1bKnowledgeDocCallbackRequest\x12\x0e\n\x06\x64oc_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x15\n\rchroma_doc_id\x18\x03 \x01(\t\x12\x13\n\x0b\x63hunk_count\x18\x04 \x01(\x05\x12\x15\n\rerror_message\x18\x05 \x01(\t\"/\n\x1cKnowledgeDocCallbackResponse\x12\x0f\n\x07message\x18\x01 \x01(\t2\x95\x03\n\rNL2SQLService\x12L\n\x0bGenerateSQL\x12\x1d.nl2sql.v1.GenerateSQLRequest\x1a\x1e.nl2sql.v1.GenerateSQLResponse\x12[\n\x10RunAgentPipeline\x12\".nl2sql.v1.RunAgentPipelineRequest\x1a#.nl2sql.v1.RunAgentPipelineResponse\x12=\n\x06Health\x12\x18.nl2sql.v1.HealthRequest\x1a\x19.nl2sql.v1.HealthResponse\x12\x46\n\tRAGSearch\x12\x1b.nl2sql.v1.RAGSearchRequest\x1a\x1c.nl2sql.v1.RAGSearchResponse\x12R\n\rIndexDocument\x12\x1f.nl2sql.v1.IndexDocumentRequest\x1a .nl2sql.v1.IndexDocumentResponse2\xff\x02\n\x12HubInternalService\x12O\n\x0cTaskCallback\x12\x1e.nl2sql.v1.TaskCallbackRequest\x1a\x1f.nl2sql.v1.TaskCallbackResponse\x12X\n\x0fRunStepCallback\x12!.nl2sql.v1.RunStepCallbackRequest\x1a\".nl2sql.v1.RunStepCallbackResponse\x12U\n\x0eInternalNL2SQL\x12 .nl2sql.v1.InternalNL2SQLRequest\x1a!.nl2sql.v1.InternalNL2SQLResponse\x12g\n\x14KnowledgeDocCallback\x12&.nl2sql.v1.KnowledgeDocCallbackRequest\x1a\'.nl2sql.v1.KnowledgeDocCallbackResponseB=Z;github.com/dataflowagenthub/hub/internal/gen/nl2sql/v1;nlv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -44,24 +44,34 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_RUNAGENTPIPELINEREQUEST']._serialized_end=440
   _globals['_RUNAGENTPIPELINERESPONSE']._serialized_start=442
   _globals['_RUNAGENTPIPELINERESPONSE']._serialized_end=525
-  _globals['_TASKCALLBACKREQUEST']._serialized_start=527
-  _globals['_TASKCALLBACKREQUEST']._serialized_end=625
-  _globals['_TASKCALLBACKRESPONSE']._serialized_start=627
-  _globals['_TASKCALLBACKRESPONSE']._serialized_end=666
-  _globals['_RUNSTEPCALLBACKREQUEST']._serialized_start=669
-  _globals['_RUNSTEPCALLBACKREQUEST']._serialized_end=815
-  _globals['_RUNSTEPCALLBACKRESPONSE']._serialized_start=817
-  _globals['_RUNSTEPCALLBACKRESPONSE']._serialized_end=859
-  _globals['_INTERNALNL2SQLREQUEST']._serialized_start=861
-  _globals['_INTERNALNL2SQLREQUEST']._serialized_end=962
-  _globals['_INTERNALNL2SQLRESPONSE']._serialized_start=964
-  _globals['_INTERNALNL2SQLRESPONSE']._serialized_end=1070
-  _globals['_KNOWLEDGEDOCCALLBACKREQUEST']._serialized_start=1073
-  _globals['_KNOWLEDGEDOCCALLBACKREQUEST']._serialized_end=1201
-  _globals['_KNOWLEDGEDOCCALLBACKRESPONSE']._serialized_start=1203
-  _globals['_KNOWLEDGEDOCCALLBACKRESPONSE']._serialized_end=1250
-  _globals['_NL2SQLSERVICE']._serialized_start=1253
-  _globals['_NL2SQLSERVICE']._serialized_end=1502
-  _globals['_HUBINTERNALSERVICE']._serialized_start=1505
-  _globals['_HUBINTERNALSERVICE']._serialized_end=1888
+  _globals['_RAGSEARCHREQUEST']._serialized_start=527
+  _globals['_RAGSEARCHREQUEST']._serialized_end=618
+  _globals['_RAGSEARCHRESPONSE']._serialized_start=620
+  _globals['_RAGSEARCHRESPONSE']._serialized_end=731
+  _globals['_CHUNKSOURCE']._serialized_start=733
+  _globals['_CHUNKSOURCE']._serialized_end=833
+  _globals['_INDEXDOCUMENTREQUEST']._serialized_start=835
+  _globals['_INDEXDOCUMENTREQUEST']._serialized_end=950
+  _globals['_INDEXDOCUMENTRESPONSE']._serialized_start=952
+  _globals['_INDEXDOCUMENTRESPONSE']._serialized_end=1031
+  _globals['_TASKCALLBACKREQUEST']._serialized_start=1033
+  _globals['_TASKCALLBACKREQUEST']._serialized_end=1131
+  _globals['_TASKCALLBACKRESPONSE']._serialized_start=1133
+  _globals['_TASKCALLBACKRESPONSE']._serialized_end=1172
+  _globals['_RUNSTEPCALLBACKREQUEST']._serialized_start=1175
+  _globals['_RUNSTEPCALLBACKREQUEST']._serialized_end=1321
+  _globals['_RUNSTEPCALLBACKRESPONSE']._serialized_start=1323
+  _globals['_RUNSTEPCALLBACKRESPONSE']._serialized_end=1365
+  _globals['_INTERNALNL2SQLREQUEST']._serialized_start=1367
+  _globals['_INTERNALNL2SQLREQUEST']._serialized_end=1468
+  _globals['_INTERNALNL2SQLRESPONSE']._serialized_start=1470
+  _globals['_INTERNALNL2SQLRESPONSE']._serialized_end=1576
+  _globals['_KNOWLEDGEDOCCALLBACKREQUEST']._serialized_start=1579
+  _globals['_KNOWLEDGEDOCCALLBACKREQUEST']._serialized_end=1707
+  _globals['_KNOWLEDGEDOCCALLBACKRESPONSE']._serialized_start=1709
+  _globals['_KNOWLEDGEDOCCALLBACKRESPONSE']._serialized_end=1756
+  _globals['_NL2SQLSERVICE']._serialized_start=1759
+  _globals['_NL2SQLSERVICE']._serialized_end=2164
+  _globals['_HUBINTERNALSERVICE']._serialized_start=2167
+  _globals['_HUBINTERNALSERVICE']._serialized_end=2550
 # @@protoc_insertion_point(module_scope)

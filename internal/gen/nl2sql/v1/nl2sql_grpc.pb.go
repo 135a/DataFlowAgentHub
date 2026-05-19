@@ -22,6 +22,8 @@ const (
 	NL2SQLService_GenerateSQL_FullMethodName      = "/nl2sql.v1.NL2SQLService/GenerateSQL"
 	NL2SQLService_RunAgentPipeline_FullMethodName = "/nl2sql.v1.NL2SQLService/RunAgentPipeline"
 	NL2SQLService_Health_FullMethodName           = "/nl2sql.v1.NL2SQLService/Health"
+	NL2SQLService_RAGSearch_FullMethodName        = "/nl2sql.v1.NL2SQLService/RAGSearch"
+	NL2SQLService_IndexDocument_FullMethodName    = "/nl2sql.v1.NL2SQLService/IndexDocument"
 )
 
 // NL2SQLServiceClient is the client API for NL2SQLService service.
@@ -33,6 +35,8 @@ type NL2SQLServiceClient interface {
 	GenerateSQL(ctx context.Context, in *GenerateSQLRequest, opts ...grpc.CallOption) (*GenerateSQLResponse, error)
 	RunAgentPipeline(ctx context.Context, in *RunAgentPipelineRequest, opts ...grpc.CallOption) (*RunAgentPipelineResponse, error)
 	Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
+	RAGSearch(ctx context.Context, in *RAGSearchRequest, opts ...grpc.CallOption) (*RAGSearchResponse, error)
+	IndexDocument(ctx context.Context, in *IndexDocumentRequest, opts ...grpc.CallOption) (*IndexDocumentResponse, error)
 }
 
 type nL2SQLServiceClient struct {
@@ -73,6 +77,26 @@ func (c *nL2SQLServiceClient) Health(ctx context.Context, in *HealthRequest, opt
 	return out, nil
 }
 
+func (c *nL2SQLServiceClient) RAGSearch(ctx context.Context, in *RAGSearchRequest, opts ...grpc.CallOption) (*RAGSearchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RAGSearchResponse)
+	err := c.cc.Invoke(ctx, NL2SQLService_RAGSearch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nL2SQLServiceClient) IndexDocument(ctx context.Context, in *IndexDocumentRequest, opts ...grpc.CallOption) (*IndexDocumentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IndexDocumentResponse)
+	err := c.cc.Invoke(ctx, NL2SQLService_IndexDocument_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NL2SQLServiceServer is the server API for NL2SQLService service.
 // All implementations must embed UnimplementedNL2SQLServiceServer
 // for forward compatibility.
@@ -82,6 +106,8 @@ type NL2SQLServiceServer interface {
 	GenerateSQL(context.Context, *GenerateSQLRequest) (*GenerateSQLResponse, error)
 	RunAgentPipeline(context.Context, *RunAgentPipelineRequest) (*RunAgentPipelineResponse, error)
 	Health(context.Context, *HealthRequest) (*HealthResponse, error)
+	RAGSearch(context.Context, *RAGSearchRequest) (*RAGSearchResponse, error)
+	IndexDocument(context.Context, *IndexDocumentRequest) (*IndexDocumentResponse, error)
 	mustEmbedUnimplementedNL2SQLServiceServer()
 }
 
@@ -100,6 +126,12 @@ func (UnimplementedNL2SQLServiceServer) RunAgentPipeline(context.Context, *RunAg
 }
 func (UnimplementedNL2SQLServiceServer) Health(context.Context, *HealthRequest) (*HealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Health not implemented")
+}
+func (UnimplementedNL2SQLServiceServer) RAGSearch(context.Context, *RAGSearchRequest) (*RAGSearchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RAGSearch not implemented")
+}
+func (UnimplementedNL2SQLServiceServer) IndexDocument(context.Context, *IndexDocumentRequest) (*IndexDocumentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method IndexDocument not implemented")
 }
 func (UnimplementedNL2SQLServiceServer) mustEmbedUnimplementedNL2SQLServiceServer() {}
 func (UnimplementedNL2SQLServiceServer) testEmbeddedByValue()                       {}
@@ -176,6 +208,42 @@ func _NL2SQLService_Health_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NL2SQLService_RAGSearch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RAGSearchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NL2SQLServiceServer).RAGSearch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NL2SQLService_RAGSearch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NL2SQLServiceServer).RAGSearch(ctx, req.(*RAGSearchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NL2SQLService_IndexDocument_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IndexDocumentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NL2SQLServiceServer).IndexDocument(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NL2SQLService_IndexDocument_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NL2SQLServiceServer).IndexDocument(ctx, req.(*IndexDocumentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NL2SQLService_ServiceDesc is the grpc.ServiceDesc for NL2SQLService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -194,6 +262,14 @@ var NL2SQLService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Health",
 			Handler:    _NL2SQLService_Health_Handler,
+		},
+		{
+			MethodName: "RAGSearch",
+			Handler:    _NL2SQLService_RAGSearch_Handler,
+		},
+		{
+			MethodName: "IndexDocument",
+			Handler:    _NL2SQLService_IndexDocument_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

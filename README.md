@@ -7,7 +7,7 @@
 ```
 Browser/SPA ──HTTP/SSE──▶ nginx ──▶ Go API :8080 (chi) ──gRPC──▶ Python :50051 (NL2SQL)
                                   │        │        │
-                            Postgres    Redis    NATS
+                             MySQL    Redis    NATS
                                   │        │        │
                             Go gRPC :9090  ◀──gRPC── Python (回调)
                                   │
@@ -58,8 +58,9 @@ go test ./...
 | `docs/CODE_QUALITY_AUDIT.md` | 代码质量审计报告（13 项已全部修复） |
 | `api/openapi/v1/openapi.yaml` | OpenAPI 规范 |
 
-## 近期改进 (2026-05-17)
+## 近期改进 (2026-05-18)
 
+- **MySQL 迁移**: 移除全部 PostgreSQL/pgx 依赖，统一使用 MySQL (`database/sql` + `go-sql-driver/mysql`)，SQL 方言全部切换至 MySQL
 - **错误处理**: 消除 ~25 处 `_ =` 静默丢弃 error，关键路径全面日志化
 - **限流扩展**: login(20/min/IP) + register(10/min/user) + datasource(30/min/user) + fail-closed 可配
 - **测试补充**: handler 集成测试，覆盖 datasource/user/knowledge/data 端点

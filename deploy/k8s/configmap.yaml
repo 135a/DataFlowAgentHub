@@ -1,0 +1,38 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hub-config
+data:
+  # API
+  HUB_HTTP_ADDR: ":8080"
+  HUB_GRPC_ADDR: ":9090"
+  HUB_ENV: "production"
+  HUB_REDIS_ADDR: "hub-redis:6379"
+  HUB_NL2SQL_TARGET: "hub-ai-worker:50051"
+  HUB_NATS_URL: "nats://hub-nats:4222"
+  HUB_MYSQL_HOST: "hub-mysql"
+  HUB_MYSQL_PORT: "3306"
+  HUB_MYSQL_ROOT_USER: "root"
+  HUB_MYSQL_PLATFORM_DB: "hub_platform"
+  HUB_QUERY_MAX_ROWS: "500"
+  HUB_QUERY_TIMEOUT: "30s"
+  HUB_APPROVAL_TTL: "24h"
+  HUB_SCHEMA_CACHE_TTL: "300s"
+  HUB_SCHEMA_MAX_TABLES: "50"
+  HUB_SCHEMA_MAX_COLUMNS_PER_TABLE: "100"
+  HUB_REPORTS_DIR: "/data/reports"
+  HUB_KNOWLEDGE_FILES_DIR: "/data/knowledge-files"
+  HUB_LLM_BASE_URL: "https://api.openai.com/v1"
+  HUB_LLM_MODEL: "gpt-4o-mini"
+  HUB_LLM_TIMEOUT: "60s"
+  HUB_RATELIMIT_FAIL_CLOSED: "false"
+  HUB_SEED_EMAIL: "admin@demo.local"
+
+  # AI Worker
+  WORKER_GRPC_ADDR: "0.0.0.0:50051"
+  LOG_LEVEL: "INFO"
+  CHROMA_PORT: "8000"
+
+  # Seed password (non-sensitive for demo; use secret in production)
+  HUB_SEED_PASSWORD: "changeme"

@@ -9,6 +9,8 @@ service NL2SQLService {
   rpc GenerateSQL(GenerateSQLRequest) returns (GenerateSQLResponse);
   rpc RunAgentPipeline(RunAgentPipelineRequest) returns (RunAgentPipelineResponse);
   rpc Health(HealthRequest) returns (HealthResponse);
+  rpc RAGSearch(RAGSearchRequest) returns (RAGSearchResponse);
+  rpc IndexDocument(IndexDocumentRequest) returns (IndexDocumentResponse);
 }
 
 message HealthRequest {}
@@ -46,6 +48,42 @@ message RunAgentPipelineResponse {
   bool ok = 1;
   string error_message = 2;
   string final_report = 3;
+}
+
+message RAGSearchRequest {
+  string trace_id = 1;
+  string workspace_id = 2;
+  string question = 3;
+  int32 top_k = 4;
+}
+
+message RAGSearchResponse {
+  bool ok = 1;
+  string answer = 2;
+  repeated ChunkSource sources = 3;
+  string error_message = 4;
+}
+
+message ChunkSource {
+  string content = 1;
+  string doc_id = 2;
+  string title = 3;
+  double distance = 4;
+  int32 chunk_index = 5;
+}
+
+message IndexDocumentRequest {
+  string trace_id = 1;
+  string workspace_id = 2;
+  string doc_id = 3;
+  string title = 4;
+  string text_content = 5;
+}
+
+message IndexDocumentResponse {
+  bool ok = 1;
+  int32 chunk_count = 2;
+  string error_message = 3;
 }
 
 // ──────── HubInternalService (Python → Go callbacks) ────────

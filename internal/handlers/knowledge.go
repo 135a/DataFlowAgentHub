@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -113,21 +114,42 @@ func (a *App) UploadKnowledgeDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. 通过 async.Client 加入异步任务队列（写入数据库并发布到 NATS）
-	taskID, err := a.AsyncTask.EnqueueTask(r.Context(), wsID, "", "", "knowledge_index", map[string]any{
-		"action":   "index_document",
-		"doc_id":   docID,
-		"title":    body.Title,
-		"content":  body.Content,
-		"doc_type": "markdown",
-	})
-	if err != nil {
-		a.Log.Error("enqueue knowledge task", zap.Error(err))
-		errJSON(w, http.StatusInternalServerError, "failed to enqueue indexing task")
-		return
+	// 2. 通过 gRPC 同步调用 Worker IndexDocument 做向量化
+	indexed := false
+	if a.Nl2sql != nil {
+		idxCtx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+		ir, iErr := a.Nl2sql.IndexDocument(idxCtx, "", wsID, docID, body.Title, body.Content)
+		if iErr == nil && ir.Ok {
+			// 更新状态为 completed
+			if uErr := a.updateDocStatus(r.Context(), docID, "completed"); uErr != nil {
+				a.Log.Warn("update doc status", zap.Error(uErr))
+			}
+			indexed = true
+			JSON(w, http.StatusAccepted, map[string]any{"id": docID, "status": "completed", "chunk_count": ir.ChunkCount})
+			return
+		}
+		a.Log.Warn("gRPC IndexDocument failed, falling back to async queue",
+			zap.Error(iErr),
+			zap.String("doc_id", docID))
 	}
 
-	JSON(w, http.StatusAccepted, map[string]any{"id": docID, "task_id": taskID, "status": "pending"})
+	if !indexed {
+		// 3. Fallback：通过 async.Client 加入异步任务队列
+		taskID, err := a.AsyncTask.EnqueueTask(r.Context(), wsID, "", "", "knowledge_index", map[string]any{
+			"action":   "index_document",
+			"doc_id":   docID,
+			"title":    body.Title,
+			"content":  body.Content,
+			"doc_type": "markdown",
+		})
+		if err != nil {
+			a.Log.Error("enqueue knowledge task", zap.Error(err))
+			errJSON(w, http.StatusInternalServerError, "failed to enqueue indexing task")
+			return
+		}
+		JSON(w, http.StatusAccepted, map[string]any{"id": docID, "task_id": taskID, "status": "pending"})
+	}
 }
 
 // UploadKnowledgeDocFromFile 接收 multipart 文件上传（.txt/.pdf/.doc/.docx）并加入 Chroma 索引队列
@@ -203,21 +225,48 @@ func (a *App) UploadKnowledgeDocFromFile(w http.ResponseWriter, r *http.Request)
 	// 2. 将文件二进制编码为 base64 加入 NATS 消息
 	fileB64 := base64.StdEncoding.EncodeToString(fileData)
 
-	taskID, err := a.AsyncTask.EnqueueTask(r.Context(), wsID, "", "", "knowledge_index", map[string]any{
-		"action":     "index_document",
-		"doc_id":     docID,
-		"title":      title,
-		"doc_type":   docType,
-		"file_bytes": fileB64,
-		"file_name":  header.Filename,
-	})
-	if err != nil {
-		a.Log.Error("enqueue knowledge task", zap.Error(err))
-		errJSON(w, http.StatusInternalServerError, "failed to enqueue indexing task")
-		return
+	// 3. 通过 gRPC 同步调用 Worker IndexDocument
+	indexed := false
+	if a.Nl2sql != nil {
+		idxCtx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+		defer cancel()
+		ir, iErr := a.Nl2sql.IndexDocument(idxCtx, "", wsID, docID, title, string(fileData))
+		if iErr == nil && ir.Ok {
+			if uErr := a.updateDocStatus(r.Context(), docID, "completed"); uErr != nil {
+				a.Log.Warn("update doc status", zap.Error(uErr))
+			}
+			indexed = true
+			JSON(w, http.StatusAccepted, map[string]any{"id": docID, "status": "completed", "chunk_count": ir.ChunkCount, "doc_type": docType})
+			return
+		}
+		a.Log.Warn("gRPC IndexDocument failed for file, falling back to async queue",
+			zap.Error(iErr),
+			zap.String("doc_id", docID))
 	}
 
-	JSON(w, http.StatusAccepted, map[string]any{"id": docID, "task_id": taskID, "status": "pending", "doc_type": docType})
+	if !indexed {
+		taskID, err := a.AsyncTask.EnqueueTask(r.Context(), wsID, "", "", "knowledge_index", map[string]any{
+			"action":     "index_document",
+			"doc_id":     docID,
+			"title":      title,
+			"doc_type":   docType,
+			"file_bytes": fileB64,
+			"file_name":  header.Filename,
+		})
+		if err != nil {
+			a.Log.Error("enqueue knowledge task", zap.Error(err))
+			errJSON(w, http.StatusInternalServerError, "failed to enqueue indexing task")
+			return
+		}
+
+		JSON(w, http.StatusAccepted, map[string]any{"id": docID, "task_id": taskID, "status": "pending", "doc_type": docType})
+	}
+}
+
+// updateDocStatus 更新知识文档的索引状态
+func (a *App) updateDocStatus(ctx context.Context, docID, status string) error {
+	_, err := a.DB.ExecContext(ctx, `UPDATE knowledge_docs SET status = ? WHERE id = ?`, status, docID)
+	return err
 }
 
 // saveKnowledgeFile 保存知识库上传文件到磁盘持久化存储

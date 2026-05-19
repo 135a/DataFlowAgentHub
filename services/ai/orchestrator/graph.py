@@ -39,7 +39,7 @@ def nl2sql_node(state: AgentState) -> dict:
             nl2sql_result = client.internal_nl2sql_sync(
                 user_message=user_input,
                 schema_json=schema_context,
-                dialect="postgres",
+                dialect="mysql",
             )
 
             if not nl2sql_result.get("ok", True):
